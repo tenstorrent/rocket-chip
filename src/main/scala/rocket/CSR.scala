@@ -293,7 +293,8 @@ class CSRFileIO(implicit p: Parameters) extends CoreBundle
     val vstart = Output(UInt(maxVLMax.log2.W))
     val vxrm = Output(UInt(2.W))
     val set_vs_dirty = Input(Bool())
-    val set_vconfig = Flipped(Valid(new VConfig))
+    val set_vtype = Flipped(Valid(new VType))
+    val set_vl = Flipped(Valid(UInt((maxVLMax.log2 + 1).W)))
     val set_vstart = Flipped(Valid(vstart))
     val set_vxsat = Input(Bool())
   })
@@ -339,7 +340,7 @@ class VType(implicit p: Parameters) extends CoreBundle {
   def max_vsew = log2Ceil(eLen/8)
   def max_vlmul = (1 << vlmul_mag.getWidth) - 1
 
-  def lmul_ok: Bool = Mux(this.vlmul_sign, this.vlmul_mag =/= 0.U && ~this.vlmul_mag < max_vsew.U - this.vsew, true.B)
+  def lmul_ok: Bool = Mux(this.vlmul_sign, this.vlmul_mag =/= 0.U && ~this.vlmul_mag < log2Ceil(vLen/8).U - this.vsew, true.B)
 
   def minVLMax: Int = ((maxVLMax / eLen) >> ((1 << vlmul_mag.getWidth) - 1)) max 1
 
@@ -1441,10 +1442,14 @@ class CSRFile(
   }
 
   io.vector.map { vio =>
-    when (vio.set_vconfig.valid) {
+    when (vio.set_vtype.valid) {
       // user of CSRFile is responsible for set_vs_dirty in this case
-      assert(vio.set_vconfig.bits.vl <= vio.set_vconfig.bits.vtype.vlMax)
-      reg_vconfig.get := vio.set_vconfig.bits
+      reg_vconfig.get.vtype := vio.set_vtype.bits
+    }
+    when (vio.set_vl.valid) {
+      // user of CSRFile is responsible for set_vs_dirty in this case
+      assert(vio.set_vl.bits <= vio.set_vtype.bits.vlMax)
+      reg_vconfig.get.vl := vio.set_vl.bits
     }
     when (vio.set_vstart.valid) {
       set_vs_dirty := true.B
