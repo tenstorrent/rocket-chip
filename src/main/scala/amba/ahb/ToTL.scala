@@ -4,11 +4,17 @@ package freechips.rocketchip.amba.ahb
 
 import chisel3._
 import chisel3.util._
-import freechips.rocketchip.amba._
+
 import org.chipsalliance.cde.config.Parameters
-import freechips.rocketchip.diplomacy._
-import freechips.rocketchip.tilelink._
-import freechips.rocketchip.util._
+
+import org.chipsalliance.diplomacy.ValName
+import org.chipsalliance.diplomacy.nodes.{MixedAdapterNode}
+import org.chipsalliance.diplomacy.lazymodule.{LazyModule, LazyModuleImp}
+
+import freechips.rocketchip.amba.{AMBAProtField, AMBAProt}
+import freechips.rocketchip.diplomacy.TransferSizes
+import freechips.rocketchip.tilelink.{TLImp, TLMasterPortParameters, TLMessages, TLMasterParameters, TLMasterToSlaveTransferSizes}
+import freechips.rocketchip.util.{BundleMap, MaskGen, DataToAugmentedData}
 
 case class AHBToTLNode()(implicit valName: ValName) extends MixedAdapterNode(AHBImpSlave, TLImp)(
   dFn = { case mp =>
@@ -66,8 +72,8 @@ class AHBToTL()(implicit p: Parameters) extends LazyModule
       val d_pause = RegInit(true.B)
       val d_fail  = RegInit(false.B)
       val d_write = RegInit(false.B)
-      val d_addr  = Reg(in.haddr)
-      val d_size  = Reg(out.a.bits.size)
+      val d_addr  = Reg(UInt(edgeIn.bundle.addrBits.W))
+      val d_size  = Reg(UInt(edgeOut.bundle.sizeBits.W))
       val d_user  = Reg(BundleMap(edgeOut.bundle.requestFields))
 
       when (out.d.valid) { d_recv  := false.B }

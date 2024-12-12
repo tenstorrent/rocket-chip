@@ -5,9 +5,12 @@ package freechips.rocketchip.amba.ahb
 import chisel3._
 import chisel3.util._
 import org.chipsalliance.cde.config.Parameters
-import freechips.rocketchip.diplomacy._
-import freechips.rocketchip.util._
+import org.chipsalliance.diplomacy.lazymodule.{LazyModule, LazyModuleImp}
+
+import freechips.rocketchip.diplomacy.{AddressSet, RegionType, TransferSizes}
+import freechips.rocketchip.resources.{DiplomaticSRAM, HasJustOneSeqMem}
 import freechips.rocketchip.tilelink.LFSRNoiseMaker
+import freechips.rocketchip.util.{MaskGen, DataToAugmentedData, SeqMemToAugmentedSeqMem, PlusArg}
 
 class AHBRAM(
     address: AddressSet,
@@ -34,7 +37,7 @@ class AHBRAM(
 
   lazy val module = new Impl
   class Impl extends LazyModuleImp(this) with HasJustOneSeqMem {
-    val (in, _) = node.in(0)
+    val (in, edge) = node.in(0)
     val laneDataBits = 8
     val mem = makeSinglePortedByteWriteSeqMem(
       size = BigInt(1) << mask.filter(b=>b).size,
@@ -67,8 +70,8 @@ class AHBRAM(
 
     // Pending write?
     val p_valid     = RegInit(false.B)
-    val p_address   = Reg(a_address)
-    val p_mask      = Reg(a_mask)
+    val p_address   = Reg(UInt())
+    val p_mask      = Reg(UInt(a_mask.getWidth.W))
     val p_latch_d   = Reg(Bool())
     val p_wdata     = d_wdata holdUnless p_latch_d
 
@@ -100,7 +103,7 @@ class AHBRAM(
                       map { case (m, (p, r)) => Mux(d_bypass && m, p, r) })
 
     // Don't fuzz hready when not in data phase
-    val d_request = Reg(false.B)
+    val d_request = RegInit(false.B)
     when (in.hready) { d_request := false.B }
     when (a_request)  { d_request := true.B }
 

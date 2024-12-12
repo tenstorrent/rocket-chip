@@ -3,11 +3,14 @@
 package freechips.rocketchip.tilelink
 
 import chisel3._
-import org.chipsalliance.cde.config.Parameters
-import freechips.rocketchip.diplomacy._
+
+import org.chipsalliance.cde.config._
+import org.chipsalliance.diplomacy.lazymodule._
+
+import freechips.rocketchip.diplomacy.{AddressSet, NodeHandle}
+import freechips.rocketchip.prci.{AsynchronousCrossing}
 import freechips.rocketchip.subsystem.CrossingWrapper
-import freechips.rocketchip.util._
-import freechips.rocketchip.util.property
+import freechips.rocketchip.util.{AsyncQueueParams, ToAsyncBundle, FromAsyncBundle, Pow2ClockDivider, property}
 
 class TLAsyncCrossingSource(sync: Option[Int])(implicit p: Parameters) extends LazyModule
 {
@@ -18,6 +21,7 @@ class TLAsyncCrossingSource(sync: Option[Int])(implicit p: Parameters) extends L
 
   lazy val module = new Impl
   class Impl extends LazyModuleImp(this) {
+    override def desiredName = (Seq("TLAsyncCrossingSource") ++ node.in.headOption.map(_._2.bundle.shortName)).mkString("_")
     (node.in zip node.out) foreach { case ((in, edgeIn), (out, edgeOut)) =>
       val bce = edgeIn.manager.anySupportAcquireB && edgeIn.client.anySupportProbe
       val psync = sync.getOrElse(edgeOut.manager.async.sync)
@@ -53,6 +57,7 @@ class TLAsyncCrossingSink(params: AsyncQueueParams = AsyncQueueParams())(implici
 
   lazy val module = new Impl
   class Impl extends LazyModuleImp(this) {
+    override def desiredName = (Seq("TLAsyncCrossingSink") ++ node.out.headOption.map(_._2.bundle.shortName)).mkString("_")
     (node.in zip node.out) foreach { case ((in, edgeIn), (out, edgeOut)) =>
       val bce = edgeOut.manager.anySupportAcquireB && edgeOut.client.anySupportProbe
 
@@ -150,4 +155,6 @@ class TLRAMAsyncCrossingTest(txns: Int = 5000, timeout: Int = 500000)(implicit p
   val dut_wide   = Module(LazyModule(new TLRAMAsyncCrossing(txns)).module)
   val dut_narrow = Module(LazyModule(new TLRAMAsyncCrossing(txns, AsynchronousCrossing(safe = false, narrow = true))).module)
   io.finished := dut_wide.io.finished && dut_narrow.io.finished
+  dut_wide.io.start := io.start
+  dut_narrow.io.start := io.start
 }

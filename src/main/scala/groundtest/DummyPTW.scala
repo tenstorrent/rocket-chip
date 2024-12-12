@@ -4,9 +4,9 @@
 package freechips.rocketchip.groundtest
 
 import chisel3._
-import chisel3.util.{RRArbiter, Valid, log2Up, RegEnable}
+import chisel3.util._
 
-import org.chipsalliance.cde.config.Parameters
+import org.chipsalliance.cde.config._
 import freechips.rocketchip.rocket._
 import freechips.rocketchip.tile.CoreModule
 import freechips.rocketchip.util.ParameterizedBundle
@@ -15,7 +15,7 @@ class DummyPTW(n: Int)(implicit p: Parameters) extends CoreModule()(p) {
   val io = IO(new Bundle {
     val requestors = Flipped(Vec(n, new TLBPTWIO))
   })
-
+  io.requestors := DontCare
   val req_arb = Module(new RRArbiter(Valid(new PTWReq), n))
   req_arb.io.in <> io.requestors.map(_.req)
   req_arb.io.out.ready := true.B

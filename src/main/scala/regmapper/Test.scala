@@ -3,10 +3,12 @@
 package freechips.rocketchip.regmapper
 
 import chisel3._
-import chisel3.util.{Cat, log2Ceil}
-import org.chipsalliance.cde.config.Parameters
-import freechips.rocketchip.diplomacy.LazyModuleImp
-import freechips.rocketchip.util.{Pow2ClockDivider}
+import chisel3.util._
+
+import org.chipsalliance.cde.config._
+import org.chipsalliance.diplomacy.lazymodule._
+
+import freechips.rocketchip.util.Pow2ClockDivider
 
 object LFSR16Seed
 {
@@ -60,10 +62,10 @@ object RRTestCombinational
   }
 
   def combo(bits: Int, rvalid: Bool => Bool, wready: Bool => Bool): RegField = {
-    val combo = Module(new RRTestCombinational(bits, rvalid, wready))
+    lazy val combo = Module(new RRTestCombinational(bits, rvalid, wready))
     RegField(bits,
-      RegReadFn { ready => combo.io.rready := ready; (combo.io.rvalid, combo.io.rdata) },
-      RegWriteFn { (valid, data) => combo.io.wvalid := valid; combo.io.wdata := data; combo.io.wready })
+      RegReadFn(ready => {combo.io.rready := ready; (combo.io.rvalid, combo.io.rdata) }),
+      RegWriteFn((valid, data) => {combo.io.wvalid := valid; combo.io.wdata := data; combo.io.wready }))
   }
 }
 
@@ -232,6 +234,7 @@ abstract class RRTest1(address: BigInt, concurrency: Int, undefZero: Boolean = t
       val field = UInt(bits.W)
 
       val readCross = Module(new RegisterReadCrossing(field))
+      readCross.io := DontCare
       readCross.io.master_clock  := clock
       readCross.io.master_reset  := reset
       readCross.io.master_bypass := false.B
@@ -239,6 +242,7 @@ abstract class RRTest1(address: BigInt, concurrency: Int, undefZero: Boolean = t
       readCross.io.slave_reset   := reset
 
       val writeCross = Module(new RegisterWriteCrossing(field))
+      writeCross.io := DontCare
       writeCross.io.master_clock  := clock
       writeCross.io.master_reset  := reset
       writeCross.io.master_bypass := false.B

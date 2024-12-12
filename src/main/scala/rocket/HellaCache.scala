@@ -3,15 +3,21 @@
 
 package freechips.rocketchip.rocket
 
-import chisel3._
-import chisel3.util.{isPow2,log2Ceil,log2Up,Decoupled,Valid}
-import chisel3.dontTouch
-import freechips.rocketchip.amba._
-import org.chipsalliance.cde.config.{Parameters, Field}
-import freechips.rocketchip.diplomacy._
-import freechips.rocketchip.tile._
-import freechips.rocketchip.tilelink._
-import freechips.rocketchip.util._
+import chisel3.{dontTouch, _}
+import chisel3.util._
+
+import org.chipsalliance.cde.config._
+import org.chipsalliance.diplomacy.bundlebridge._
+import org.chipsalliance.diplomacy.lazymodule._
+
+import freechips.rocketchip.amba.AMBAProtField
+import freechips.rocketchip.diplomacy.{IdRange, TransferSizes, RegionType}
+import freechips.rocketchip.tile.{L1CacheParams, HasL1CacheParameters, HasCoreParameters, CoreBundle, HasNonDiplomaticTileParameters, BaseTile, HasTileParameters}
+import freechips.rocketchip.tilelink.{TLMasterParameters, TLClientNode, TLMasterPortParameters, TLEdgeOut, TLWidthWidget, TLFIFOFixer, ClientMetadata}
+import freechips.rocketchip.util.{Code, RandomReplacement, ParameterizedBundle}
+
+import freechips.rocketchip.util.{BooleanToAugmentedBoolean, IntToAugmentedInt}
+
 import scala.collection.mutable.ListBuffer
 
 case class DCacheParams(
@@ -119,6 +125,7 @@ trait HasCoreData extends HasCoreParameters {
 
 class HellaCacheReqInternal(implicit p: Parameters) extends CoreBundle()(p) with HasCoreMemOp {
   val phys = Bool()
+  val no_resp = Bool() // The dcache may omit generating a response for this request
   val no_alloc = Bool()
   val no_xcpt = Bool()
 }
@@ -180,6 +187,7 @@ class HellaCacheIO(implicit p: Parameters) extends CoreBundle()(p) {
   val s2_gpa_is_pte = Input(Bool())
   val uncached_resp = tileParams.dcache.get.separateUncachedResp.option(Flipped(Decoupled(new HellaCacheResp)))
   val ordered = Input(Bool())
+  val store_pending = Input(Bool()) // there is a store in a store buffer somewhere
   val perf = Input(new HellaCachePerfEvents())
 
   val keep_clock_enabled = Output(Bool()) // should D$ avoid clock-gating itself?
@@ -188,17 +196,17 @@ class HellaCacheIO(implicit p: Parameters) extends CoreBundle()(p) {
 
 /** Base classes for Diplomatic TL2 HellaCaches */
 
-abstract class HellaCache(staticIdForMetadataUseOnly: Int)(implicit p: Parameters) extends LazyModule
+abstract class HellaCache(tileId: Int)(implicit p: Parameters) extends LazyModule
     with HasNonDiplomaticTileParameters {
   protected val cfg = tileParams.dcache.get
 
   protected def cacheClientParameters = cfg.scratch.map(x => Seq()).getOrElse(Seq(TLMasterParameters.v1(
-    name          = s"Core ${staticIdForMetadataUseOnly} DCache",
+    name          = s"Core ${tileId} DCache",
     sourceId      = IdRange(0, 1 max cfg.nMSHRs),
     supportsProbe = TransferSizes(cfg.blockBytes, cfg.blockBytes))))
 
   protected def mmioClientParameters = Seq(TLMasterParameters.v1(
-    name          = s"Core ${staticIdForMetadataUseOnly} DCache MMIO",
+    name          = s"Core ${tileId} DCache MMIO",
     sourceId      = IdRange(firstMMIO, firstMMIO + cfg.nMMIOs),
     requestFifo   = true))
 
@@ -221,21 +229,24 @@ abstract class HellaCache(staticIdForMetadataUseOnly: Int)(implicit p: Parameter
   require(!tileParams.core.haveCFlush || cfg.scratch.isEmpty, "CFLUSH_D_L1 instruction requires a D$")
 }
 
-class HellaCacheBundle(val outer: HellaCache)(implicit p: Parameters) extends CoreBundle()(p) {
-  val cpu = Flipped((new HellaCacheIO))
+class HellaCacheBundle(implicit p: Parameters) extends CoreBundle()(p) {
+  val cpu = Flipped(new HellaCacheIO)
   val ptw = new TLBPTWIO()
   val errors = new DCacheErrors
+  val tlb_port = new DCacheTLBPort
 }
 
 class HellaCacheModule(outer: HellaCache) extends LazyModuleImp(outer)
     with HasL1HellaCacheParameters {
-  implicit val edge = outer.node.edges.out(0)
+  implicit val edge: TLEdgeOut = outer.node.edges.out(0)
   val (tl_out, _) = outer.node.out(0)
-  val io = IO(new HellaCacheBundle(outer))
+  val io = IO(new HellaCacheBundle)
   val io_hartid = outer.hartIdSinkNodeOpt.map(_.bundle)
   val io_mmio_address_prefix = outer.mmioAddressPrefixSinkNodeOpt.map(_.bundle)
   dontTouch(io.cpu.resp) // Users like to monitor these fields even if the core ignores some signals
   dontTouch(io.cpu.s1_data)
+
+  require(rowBits == edge.bundle.dataBits)
 
   private val fifoManagers = edge.manager.managers.filter(TLFIFOFixer.allVolatile)
   fifoManagers.foreach { m =>
@@ -252,9 +263,9 @@ case object BuildHellaCache extends Field[BaseTile => Parameters => HellaCache](
 object HellaCacheFactory {
   def apply(tile: BaseTile)(p: Parameters): HellaCache = {
     if (tile.tileParams.dcache.get.nMSHRs == 0)
-      new DCache(tile.staticIdForMetadataUseOnly, tile.crossing)(p)
+      new DCache(tile.tileId, tile.crossing)(p)
     else
-      new NonBlockingDCache(tile.staticIdForMetadataUseOnly)(p)
+      new NonBlockingDCache(tile.tileId)(p)
   }
 }
 
@@ -266,9 +277,12 @@ trait HasHellaCache { this: BaseTile =>
   var nDCachePorts = 0
   lazy val dcache: HellaCache = LazyModule(p(BuildHellaCache)(this)(p))
 
-  tlMasterXbar.node := dcache.node
+  tlMasterXbar.node := TLWidthWidget(tileParams.dcache.get.rowBits/8) := dcache.node
   dcache.hartIdSinkNodeOpt.map { _ := hartIdNexusNode }
   dcache.mmioAddressPrefixSinkNodeOpt.map { _ := mmioAddressPrefixNexusNode }
+  InModuleBody {
+    dcache.module.io.tlb_port := DontCare
+  }
 }
 
 trait HasHellaCacheModule {
@@ -327,7 +341,7 @@ class L1MetadataArray[T <: L1Metadata](onReset: () => T)(implicit p: Parameters)
   when (wen) {
     tag_array.write(waddr, VecInit.fill(nWays)(wdata), wmask)
   }
-  io.resp := tag_array.read(io.read.bits.idx, io.read.fire()).map(_.asTypeOf(chiselTypeOf(rstVal)))
+  io.resp := tag_array.read(io.read.bits.idx, io.read.fire).map(_.asTypeOf(chiselTypeOf(rstVal)))
 
   io.read.ready := !wen // so really this could be a 6T RAM
   io.write.ready := !rst

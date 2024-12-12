@@ -3,13 +3,19 @@
 package freechips.rocketchip.tilelink
 
 import chisel3._
-import org.chipsalliance.cde.config.Parameters
-import freechips.rocketchip.diplomacy._
-import freechips.rocketchip.util._
-import freechips.rocketchip.amba.axi4._
-import freechips.rocketchip.amba._
-import chisel3.util.{log2Ceil, UIntToOH, Queue, Decoupled, Cat}
-import freechips.rocketchip.util.EnhancedChisel3Assign
+import chisel3.util._
+
+import org.chipsalliance.cde.config._
+import org.chipsalliance.diplomacy._
+import org.chipsalliance.diplomacy.lazymodule._
+import org.chipsalliance.diplomacy.nodes._
+
+import freechips.rocketchip.amba.{AMBACorrupt, AMBACorruptField, AMBAProt, AMBAProtField}
+import freechips.rocketchip.amba.axi4.{AXI4BundleARW, AXI4MasterParameters, AXI4MasterPortParameters, AXI4Parameters, AXI4Imp}
+import freechips.rocketchip.diplomacy.{IdMap, IdMapEntry, IdRange}
+import freechips.rocketchip.util.{BundleField, ControlKey, ElaborationArtefacts, UIntToOH1}
+
+import freechips.rocketchip.util.DataToAugmentedData
 
 class AXI4TLStateBundle(val sourceBits: Int) extends Bundle {
   val size   = UInt(4.W)
@@ -17,13 +23,10 @@ class AXI4TLStateBundle(val sourceBits: Int) extends Bundle {
 }
 
 case object AXI4TLState extends ControlKey[AXI4TLStateBundle]("tl_state")
-case class AXI4TLStateField(sourceBits: Int) extends BundleField(AXI4TLState) {
-  def data = Output(new AXI4TLStateBundle(sourceBits))
-  def default(x: AXI4TLStateBundle) = {
-    x.size   := 0.U
-    x.source := 0.U
-  }
-}
+case class AXI4TLStateField(sourceBits: Int) extends BundleField[AXI4TLStateBundle](AXI4TLState, Output(new AXI4TLStateBundle(sourceBits)), x => {
+  x.size := 0.U
+  x.source := 0.U
+})
 
 /** TLtoAXI4IdMap serves as a record for the translation performed between id spaces.
   *
@@ -149,7 +152,7 @@ class TLToAXI4(val combinational: Boolean = true, val adapterName: Option[String
       val depth = if (combinational) 1 else 2
       val out_arw = Wire(Decoupled(new AXI4BundleARW(out.params)))
       val out_w = Wire(chiselTypeOf(out.w))
-      out.w :<> Queue.irrevocable(out_w, entries=depth, flow=combinational)
+      out.w :<>= Queue.irrevocable(out_w, entries=depth, flow=combinational)
       val queue_arw = Queue.irrevocable(out_arw, entries=depth, flow=combinational)
 
       // Fan out the ARW channel to AR and AW
@@ -162,7 +165,7 @@ class TLToAXI4(val combinational: Boolean = true, val adapterName: Option[String
       val beatBytes = edgeIn.manager.beatBytes
       val maxSize   = log2Ceil(beatBytes).U
       val doneAW    = RegInit(false.B)
-      when (in.a.fire()) { doneAW := !a_last }
+      when (in.a.fire) { doneAW := !a_last }
 
       val arw = out_arw.bits
       arw.wen   := a_isPut
@@ -175,8 +178,12 @@ class TLToAXI4(val combinational: Boolean = true, val adapterName: Option[String
       arw.cache := 0.U // do not allow AXI to modify our transactions
       arw.prot  := AXI4Parameters.PROT_PRIVILEGED
       arw.qos   := 0.U // no QoS
-      arw.user :<= in.a.bits.user
-      arw.echo :<= in.a.bits.echo
+      Connectable.waiveUnmatched(arw.user, in.a.bits.user) match {
+        case (lhs, rhs) => lhs :<= rhs
+      }
+      Connectable.waiveUnmatched(arw.echo, in.a.bits.echo) match {
+        case (lhs, rhs) => lhs :<= rhs
+      }
       val a_extra = arw.echo(AXI4TLState)
       a_extra.source := a_source
       a_extra.size   := a_size
@@ -207,7 +214,7 @@ class TLToAXI4(val combinational: Boolean = true, val adapterName: Option[String
 
       // R and B => D arbitration
       val r_holds_d = RegInit(false.B)
-      when (out.r.fire()) { r_holds_d := !out.r.bits.last }
+      when (out.r.fire) { r_holds_d := !out.r.bits.last }
       // Give R higher priority than B, unless B has been delayed for 8 cycles
       val b_delay = Reg(UInt(3.W))
       when (out.b.valid && !out.b.ready) {
@@ -225,17 +232,25 @@ class TLToAXI4(val combinational: Boolean = true, val adapterName: Option[String
       // request. We must pulse extend this value as AXI is allowed to change the
       // value of RRESP on every beat, and ChipLink may not.
       val r_first = RegInit(true.B)
-      when (out.r.fire()) { r_first := out.r.bits.last }
+      when (out.r.fire) { r_first := out.r.bits.last }
       val r_denied  = out.r.bits.resp === AXI4Parameters.RESP_DECERR holdUnless r_first
       val r_corrupt = out.r.bits.resp =/= AXI4Parameters.RESP_OKAY
       val b_denied  = out.b.bits.resp =/= AXI4Parameters.RESP_OKAY
 
       val r_d = edgeIn.AccessAck(r_source, r_size, 0.U, denied = r_denied, corrupt = r_corrupt || r_denied)
       val b_d = edgeIn.AccessAck(b_source, b_size, denied = b_denied)
-      r_d.user :<= out.r.bits.user
-      r_d.echo :<= out.r.bits.echo
-      b_d.user :<= out.b.bits.user
-      b_d.echo :<= out.b.bits.echo
+      Connectable.waiveUnmatched(r_d.user, out.r.bits.user) match {
+        case (lhs, rhs) => lhs.squeezeAll :<= rhs.squeezeAll
+      }
+      Connectable.waiveUnmatched(r_d.echo, out.r.bits.echo) match {
+        case (lhs, rhs) => lhs.squeezeAll :<= rhs.squeezeAll
+      }
+      Connectable.waiveUnmatched(b_d.user, out.b.bits.user) match {
+        case (lhs, rhs) => lhs.squeezeAll :<= rhs.squeezeAll
+      }
+      Connectable.waiveUnmatched(b_d.echo, out.b.bits.echo) match {
+        case (lhs, rhs) => lhs.squeezeAll :<= rhs.squeezeAll
+      }
 
       in.d.bits := Mux(r_wins, r_d, b_d)
       in.d.bits.data := out.r.bits.data // avoid a costly Mux
@@ -258,8 +273,8 @@ class TLToAXI4(val combinational: Boolean = true, val adapterName: Option[String
         val write = Reg(Bool())
         val idle = count === 0.U
 
-        val inc = as && out_arw.fire()
-        val dec = ds && d_last && in.d.fire()
+        val inc = as && out_arw.fire
+        val dec = ds && d_last && in.d.fire
         count := count + inc.asUInt - dec.asUInt
 
         assert (!dec || count =/= 0.U)        // underflow

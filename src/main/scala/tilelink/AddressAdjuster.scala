@@ -4,9 +4,12 @@ package freechips.rocketchip.tilelink
 
 import chisel3._
 import chisel3.util._
+
 import org.chipsalliance.cde.config._
-import freechips.rocketchip.diplomacy._
-import freechips.rocketchip.util.EnhancedChisel3Assign
+import org.chipsalliance.diplomacy.bundlebridge._
+import org.chipsalliance.diplomacy.lazymodule._
+
+import freechips.rocketchip.diplomacy.AddressSet
 
 class AddressAdjuster(
     val params: ReplicatedRegion, // only devices in this region get adjusted
@@ -283,12 +286,12 @@ class AddressAdjuster(
         // Sources unused in the stall signal calculation should be pruned by DCE
         // Only fix-up order when crossing local/remote boundaries
         val flight = RegInit(VecInit(Seq.fill(parentEdge.client.endSourceId) { false.B }))
-        when (a_first && parent.a.fire() && a_adjustable) { flight(parent.a.bits.source) := true.B  }
-        when (d_first && parent.d.fire())                 { flight(parent.d.bits.source) := false.B }
+        when (a_first && parent.a.fire && a_adjustable) { flight(parent.a.bits.source) := true.B  }
+        when (d_first && parent.d.fire)                 { flight(parent.d.bits.source) := false.B }
 
         val stalls = parentEdge.client.clients.filter(c => c.requestFifo && c.sourceId.size > 1).map { c =>
           val a_sel = c.sourceId.contains(parent.a.bits.source)
-          val local = RegEnable(a_dynamic_local, parent.a.fire() && a_sel)
+          val local = RegEnable(a_dynamic_local, parent.a.fire && a_sel)
           val track = flight.slice(c.sourceId.start, c.sourceId.end)
 
           a_sel && a_first && track.reduce(_ || _) && (local =/= a_dynamic_local)

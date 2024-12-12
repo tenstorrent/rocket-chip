@@ -7,9 +7,9 @@ import freechips.rocketchip.util._
 import scala.collection.immutable.ListMap
 import chisel3.util.Decoupled
 import chisel3.util.DecoupledIO
-import chisel3.experimental.DataMirror
+import chisel3.reflect.DataMirror
 
-abstract class TLBundleBase(params: TLBundleParameters) extends GenericParameterizedBundle(params)
+abstract class TLBundleBase(val params: TLBundleParameters) extends Bundle
 
 // common combos in lazy policy:
 //   Put + Acquire
@@ -173,6 +173,7 @@ sealed trait TLAddrChannel extends TLDataChannel
 final class TLBundleA(params: TLBundleParameters)
   extends TLBundleBase(params) with TLAddrChannel
 {
+  override def typeName = s"TLBundleA_${params.shortName}"
   val channelName = "'A' channel"
   // fixed fields during multibeat:
   val opcode  = UInt(3.W)
@@ -190,6 +191,7 @@ final class TLBundleA(params: TLBundleParameters)
 final class TLBundleB(params: TLBundleParameters)
   extends TLBundleBase(params) with TLAddrChannel
 {
+  override def typeName = s"TLBundleB_${params.shortName}"
   val channelName = "'B' channel"
   // fixed fields during multibeat:
   val opcode  = UInt(3.W)
@@ -206,6 +208,7 @@ final class TLBundleB(params: TLBundleParameters)
 final class TLBundleC(params: TLBundleParameters)
   extends TLBundleBase(params) with TLAddrChannel
 {
+  override def typeName = s"TLBundleC_${params.shortName}"
   val channelName = "'C' channel"
   // fixed fields during multibeat:
   val opcode  = UInt(3.W)
@@ -223,6 +226,7 @@ final class TLBundleC(params: TLBundleParameters)
 final class TLBundleD(params: TLBundleParameters)
   extends TLBundleBase(params) with TLDataChannel
 {
+  override def typeName = s"TLBundleD_${params.shortName}"
   val channelName = "'D' channel"
   // fixed fields during multibeat:
   val opcode  = UInt(3.W)
@@ -241,6 +245,7 @@ final class TLBundleD(params: TLBundleParameters)
 final class TLBundleE(params: TLBundleParameters)
   extends TLBundleBase(params) with TLChannel
 {
+  override def typeName = s"TLBundleE_${params.shortName}"
   val channelName = "'E' channel"
   val sink = UInt(params.sinkBits.W) // to
 }
@@ -261,7 +266,6 @@ class TLBundle(val params: TLBundleParameters) extends Record
   def d: DecoupledIO[TLBundleD] = optD.getOrElse(WireDefault(0.U.asTypeOf(Decoupled(new TLBundleD(params)))))
   def e: DecoupledIO[TLBundleE] = optE.getOrElse(WireDefault(0.U.asTypeOf(Decoupled(new TLBundleE(params)))))
 
-  override def cloneType: this.type = (new TLBundle(params)).asInstanceOf[this.type]
   val elements =
     if (params.hasBCE) ListMap("e" -> e, "d" -> d, "c" -> c, "b" -> b, "a" -> a)
     else ListMap("d" -> d, "a" -> a)
@@ -290,7 +294,7 @@ object TLBundle
   def apply(params: TLBundleParameters) = new TLBundle(params)
 }
 
-class TLAsyncBundleBase(params: TLAsyncBundleParameters) extends GenericParameterizedBundle(params)
+class TLAsyncBundleBase(val params: TLAsyncBundleParameters) extends Bundle
 
 class TLAsyncBundle(params: TLAsyncBundleParameters) extends TLAsyncBundleBase(params)
 {

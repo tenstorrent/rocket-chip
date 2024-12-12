@@ -3,14 +3,18 @@
 package freechips.rocketchip.tilelink
 
 import chisel3._
-import freechips.rocketchip.amba._
-import freechips.rocketchip.amba.ahb._
-import org.chipsalliance.cde.config.Parameters
-import freechips.rocketchip.diplomacy._
-import freechips.rocketchip.util._
-import AHBParameters._
-import chisel3.util.{RegEnable, Queue, Cat, log2Ceil}
-import freechips.rocketchip.util.EnhancedChisel3Assign
+import chisel3.util._
+
+import org.chipsalliance.cde.config._
+import org.chipsalliance.diplomacy._
+import org.chipsalliance.diplomacy.lazymodule._
+import org.chipsalliance.diplomacy.nodes._
+
+import freechips.rocketchip.amba.{AMBAProt, AMBAProtField}
+import freechips.rocketchip.amba.ahb.{AHBImpMaster, AHBParameters, AHBMasterParameters, AHBMasterPortParameters}
+import freechips.rocketchip.amba.ahb.AHBParameters.{BURST_INCR, BURST_SINGLE, TRANS_NONSEQ, TRANS_SEQ, TRANS_IDLE, TRANS_BUSY, PROT_DEFAULT}
+import freechips.rocketchip.diplomacy.TransferSizes
+import freechips.rocketchip.util.{BundleMap, UIntToOH1}
 
 case class TLToAHBNode(supportHints: Boolean)(implicit valName: ValName) extends MixedAdapterNode(TLImp, AHBImpMaster)(
   dFn = { cp =>
@@ -45,7 +49,7 @@ case class TLToAHBNode(supportHints: Boolean)(implicit valName: ValName) extends
       requestKeys    = AMBAProt +: sp.requestKeys)
   })
 
-class AHBControlBundle(params: TLEdge) extends GenericParameterizedBundle(params)
+class AHBControlBundle(val params: TLEdge) extends Bundle
 {
   val full   = Bool()
   val send   = Bool() // => full+data
@@ -79,6 +83,7 @@ class TLToAHB(val aFlow: Boolean = false, val supportHints: Boolean = true, val 
 
       // Initial FSM state
       val resetState = Wire(new AHBControlBundle(edgeIn))
+      resetState := DontCare
       resetState.full  := false.B
       resetState.send  := false.B
       resetState.first := true.B
@@ -141,9 +146,9 @@ class TLToAHB(val aFlow: Boolean = false, val supportHints: Boolean = true, val 
         a_commit   := !d_block && !pre.write // only read beats commit to a D beat answer
         in.a.ready := !d_block && pre.write
       } .otherwise /* new burst */ {
-        a_commit := in.a.fire() // every first beat commits to a D beat answer
+        a_commit := in.a.fire // every first beat commits to a D beat answer
         in.a.ready := !d_block
-        when (in.a.fire()) {
+        when (in.a.fire) {
           post.full  := true.B
           post.send  := true.B
           post.last  := a_singleBeat
@@ -153,7 +158,7 @@ class TLToAHB(val aFlow: Boolean = false, val supportHints: Boolean = true, val 
           post.hauser:<= in.a.bits.user
           post.echo  :<= in.a.bits.echo
         }
-        when (in.a.fire() && !a_hint) {
+        when (in.a.fire && !a_hint) {
           post.write := edgeIn.hasData(in.a.bits)
           post.hsize := Mux(a_singleBeat, in.a.bits.size, lgBytes.U)
           post.hburst:= Mux(a_singleBeat, BURST_SINGLE, (a_logBeats1<<1) | 1.U)
@@ -205,13 +210,13 @@ class TLToAHB(val aFlow: Boolean = false, val supportHints: Boolean = true, val 
       // commited AHB requests (A+D phases = 2). To decouple d_ready from
       // a_ready and htrans, we add another entry for aFlow=false.
       val depth = if (aFlow) 2 else 3
-      val d = Wire(in.d)
-      in.d :<> Queue(d, depth, flow=true)
+      val d = Wire(new DecoupledIO(new TLBundleD(edgeIn.bundle)))
+      in.d :<>= Queue(d, depth, flow=true)
       assert (!d.valid || d.ready)
 
       val d_flight = RegInit(0.U(2.W))
       assert (d_flight <= depth.U)
-      d_flight := d_flight + a_commit.asUInt - in.d.fire().asUInt
+      d_flight := d_flight + a_commit.asUInt - in.d.fire.asUInt
       d_block := d_flight >= depth.U
 
       val d_valid   = RegInit(false.B)

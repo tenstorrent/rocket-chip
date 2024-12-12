@@ -3,11 +3,13 @@
 package freechips.rocketchip.tilelink
 
 import chisel3._
-import org.chipsalliance.cde.config.Parameters
-import freechips.rocketchip.diplomacy._
-import freechips.rocketchip.util._
+
+import org.chipsalliance.cde.config._
+import org.chipsalliance.diplomacy.lazymodule._
+
+import freechips.rocketchip.diplomacy.{AddressSet, RegionType, IdRange, TransferSizes}
+import freechips.rocketchip.util.Repeater
 import freechips.rocketchip.devices.tilelink.TLROM
-import freechips.rocketchip.util.EnhancedChisel3Assign
 
 // Acks Hints for managers that don't support them or Acks all Hints if !passthrough
 class TLHintHandler(passthrough: Boolean = true)(implicit p: Parameters) extends LazyModule
@@ -56,8 +58,8 @@ class TLHintHandler(passthrough: Boolean = true)(implicit p: Parameters) extends
         val mux = Wire(chiselTypeOf(in.a))
 
         repeater.io.repeat := mapPP && !edgeIn.last(out.a)
-        repeater.io.enq :<> in.a
-        out.a :<> mux
+        repeater.io.enq :<>= in.a
+        out.a :<>= mux
 
         // Only some signals need to be repeated
         mux.bits.opcode  := in.a.bits.opcode  // ignored when full
@@ -71,7 +73,7 @@ class TLHintHandler(passthrough: Boolean = true)(implicit p: Parameters) extends
 
         // Hints have no data fields; use defaults for those
         mux.bits.user :<= in.a.bits.user
-        mux.bits.user.partialAssignL(repeater.io.deq.bits.user.subset(_.isControl))
+        mux.bits.user :<= repeater.io.deq.bits.user.subset(_.isControl)
         mux.bits.echo :<= repeater.io.deq.bits.echo // control only
 
         mux.valid := repeater.io.deq.valid

@@ -5,24 +5,29 @@ package freechips.rocketchip.devices.debug
 
 import chisel3._
 import chisel3.util._
+
 import org.chipsalliance.cde.config._
-import freechips.rocketchip.diplomacy._
-import freechips.rocketchip.regmapper._
+import org.chipsalliance.diplomacy.lazymodule._
+
+import freechips.rocketchip.amba.apb.{APBFanout, APBToTL}
+import freechips.rocketchip.devices.debug.systembusaccess.{SBToTL, SystemBusAccessModule}
+import freechips.rocketchip.devices.tilelink.{DevNullParams, TLBusBypass, TLError}
+import freechips.rocketchip.diplomacy.{AddressSet, BufferParams}
+import freechips.rocketchip.resources.{Description, Device, Resource, ResourceBindings, ResourceString, SimpleDevice}
+import freechips.rocketchip.interrupts.{IntNexusNode, IntSinkParameters, IntSinkPortParameters, IntSourceParameters, IntSourcePortParameters, IntSyncCrossingSource, IntSyncIdentityNode}
+import freechips.rocketchip.regmapper.{RegField, RegFieldAccessType, RegFieldDesc, RegFieldGroup, RegFieldWrType, RegReadFn, RegWriteFn}
 import freechips.rocketchip.rocket.{CSRs, Instructions}
 import freechips.rocketchip.tile.MaxHartIdBits
-import freechips.rocketchip.tilelink._
-import freechips.rocketchip.devices.tilelink.{DevNullParams, TLError}
-import freechips.rocketchip.interrupts._
-import freechips.rocketchip.util._
-import freechips.rocketchip.devices.debug.systembusaccess._
-import freechips.rocketchip.devices.tilelink.TLBusBypass
-import freechips.rocketchip.amba.apb.{APBToTL, APBFanout}
+import freechips.rocketchip.tilelink.{TLAsyncCrossingSink, TLAsyncCrossingSource, TLBuffer, TLRegisterNode, TLXbar}
+import freechips.rocketchip.util.{Annotated, AsyncBundle, AsyncQueueParams, AsyncResetSynchronizerShiftReg, FromAsyncBundle, ParameterizedBundle, ResetSynchronizerShiftReg, ToAsyncBundle}
+
+import freechips.rocketchip.util.SeqBoolBitwiseOps
+import freechips.rocketchip.util.SeqToAugmentedSeq
 import freechips.rocketchip.util.BooleanToAugmentedBoolean
 
 object DsbBusConsts {
   def sbAddrWidth = 12
-  def sbIdWidth   = 10 
-
+  def sbIdWidth   = 10
 }
 
 object DsbRegAddrs{
@@ -641,6 +646,9 @@ class TLDebugModuleOuter(device: Device)(implicit p: Parameters) extends LazyMod
     if (supportHartArray) {
       io.innerCtrl.bits.hasel      := Mux(haselWrEn, DMCONTROLWrData.hasel, DMCONTROLReg.hasel)
       io.innerCtrl.bits.hamask     := hamask
+    } else {
+      io.innerCtrl.bits.hasel := DontCare
+      io.innerCtrl.bits.hamask := DontCare
     }
 
     io.ctrl.ndreset := DMCONTROLReg.ndmreset
@@ -664,7 +672,7 @@ class TLDebugModuleOuterAsync(device: Device)(implicit p: Parameters) extends La
 
   val cfg = p(DebugModuleKey).get
 
-  val dmiXbar = LazyModule (new TLXbar())
+  val dmiXbar = LazyModule (new TLXbar(nameSuffix = Some("dmixbar")))
 
   val dmi2tlOpt = (!p(ExportDebug).apb).option({
     val dmi2tl = LazyModule(new DMIToTL())
@@ -690,7 +698,8 @@ class TLDebugModuleOuterAsync(device: Device)(implicit p: Parameters) extends La
   })
 
   val dmOuter = LazyModule( new TLDebugModuleOuter(device))
-  val intnode = IntSyncCrossingSource(alreadyRegistered = true) :*= dmOuter.intnode
+  val intnode = IntSyncIdentityNode()
+  intnode :*= IntSyncCrossingSource(alreadyRegistered = true) :*= dmOuter.intnode
 
   val dmiBypass = LazyModule(new TLBusBypass(beatBytes=4, bufferError=false, maxAtomic=0, maxTransfer=4))
   val dmiInnerNode = TLAsyncCrossingSource() := dmiBypass.node := dmiXbar.node
@@ -724,6 +733,7 @@ class TLDebugModuleOuterAsync(device: Device)(implicit p: Parameters) extends La
 
     childClock := io.dmi_clock
     childReset := io.dmi_reset
+    override def provideImplicitClockToLazyChildren = true
 
     withClockAndReset(childClock, childReset) {
       dmi2tlOpt.foreach { _.module.io.dmi <> io.dmi.get }
@@ -895,7 +905,7 @@ class TLDebugModuleInner(device: Device, getNComponents: () => Int, beatBytes: I
     if (nComponents > 1) {
       when (~io.dmactive) {
         selectedHartReg := 0.U
-      }.elsewhen (io.innerCtrl.fire()){
+      }.elsewhen (io.innerCtrl.fire){
         selectedHartReg := io.innerCtrl.bits.hartsel
       }
     }
@@ -905,7 +915,7 @@ class TLDebugModuleInner(device: Device, getNComponents: () => Int, beatBytes: I
       val hamaskReg = Reg(Vec(nComponents, Bool()))
       when (~io.dmactive || ~dmAuthenticated) {
         hamaskReg := hamaskZero
-      }.elsewhen (io.innerCtrl.fire()){
+      }.elsewhen (io.innerCtrl.fire){
         hamaskReg := Mux(io.innerCtrl.bits.hasel, io.innerCtrl.bits.hamask, hamaskZero)
       }
       hamaskFull := hamaskReg
@@ -913,7 +923,7 @@ class TLDebugModuleInner(device: Device, getNComponents: () => Int, beatBytes: I
     // Outer.hamask doesn't consider the hart selected by dmcontrol.hartsello,
     // so append it here
     when (selectedHartReg < nComponents.U) {
-      hamaskFull(selectedHartReg) := true.B
+      hamaskFull(if (nComponents == 1) 0.U(0.W) else selectedHartReg) := true.B
     }
 
     io.innerCtrl.ready := true.B
@@ -943,7 +953,7 @@ class TLDebugModuleInner(device: Device, getNComponents: () => Int, beatBytes: I
 
     when (~io.dmactive || ~dmAuthenticated) {
       hrmaskReg := hrReset
-    }.elsewhen (io.innerCtrl.fire()){
+    }.elsewhen (io.innerCtrl.fire){
       hrmaskReg := io.innerCtrl.bits.hrmask
     }
 
@@ -970,7 +980,7 @@ class TLDebugModuleInner(device: Device, getNComponents: () => Int, beatBytes: I
     DMSTATUSRdData.version       := 2.U    // Version 0.13
     io.auth.map(a => DMSTATUSRdData.authbusy := a.dmAuthBusy)
 
-    val resumereq = io.innerCtrl.fire() && io.innerCtrl.bits.resumereq
+    val resumereq = io.innerCtrl.fire && io.innerCtrl.bits.resumereq
 
     when (dmAuthenticated) {
       DMSTATUSRdData.hasresethaltreq := true.B
@@ -1003,7 +1013,7 @@ class TLDebugModuleInner(device: Device, getNComponents: () => Int, beatBytes: I
     when(~io.dmactive || ~dmAuthenticated) {
       haveResetBitRegs := 0.U
     }.otherwise {
-      when (io.innerCtrl.fire() && io.innerCtrl.bits.ackhavereset) {
+      when (io.innerCtrl.fire && io.innerCtrl.bits.ackhavereset) {
         haveResetBitRegs := (haveResetBitRegs & (~(hamaskWrSel.asUInt))) | hartIsInResetSync.asUInt 
       }.otherwise {
         haveResetBitRegs := haveResetBitRegs | hartIsInResetSync.asUInt 
@@ -1037,7 +1047,7 @@ class TLDebugModuleInner(device: Device, getNComponents: () => Int, beatBytes: I
           }
         }
       }
-      DMCS2RdData.haltgroup := hgParticipateHart(selectedHartReg)
+      DMCS2RdData.haltgroup := hgParticipateHart(if (nComponents == 1) 0.U(0.W) else selectedHartReg)
 
       if (nExtTriggers > 0) {
         val hgSelect = Reg(Bool())
@@ -1721,7 +1731,7 @@ class TLDebugModuleInner(device: Device, getNComponents: () => Int, beatBytes: I
     // This is not an initialization!
     val ctrlStateReg = Reg(chiselTypeOf(CtrlState(Waiting)))
 
-    val hartHalted   = haltedBitRegs(selectedHartReg)
+    val hartHalted   = haltedBitRegs(if (nComponents == 1) 0.U(0.W) else selectedHartReg)
     val ctrlStateNxt = WireInit(ctrlStateReg)
 
     //------------------------
@@ -1895,6 +1905,7 @@ class TLDebugModuleInnerAsync(device: Device, getNComponents: () => Int, beatByt
 
     childClock := io.debug_clock
     childReset := io.debug_reset
+    override def provideImplicitClockToLazyChildren = true
 
     val dmactive_synced = withClockAndReset(childClock, childReset) {
       val dmactive_synced = AsyncResetSynchronizerShiftReg(in=io.dmactive, sync=3, name=Some("dmactiveSync"))
@@ -1983,6 +1994,7 @@ class TLDebugModule(beatBytes: Int)(implicit p: Parameters) extends LazyModule {
 
     childClock := io.tl_clock
     childReset := io.tl_reset
+    override def provideImplicitClockToLazyChildren = true
 
     dmOuter.module.io.dmi.foreach { dmOuterDMI =>
       dmOuterDMI <> io.dmi.get.dmi

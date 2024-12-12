@@ -3,9 +3,13 @@
 package freechips.rocketchip.amba.axi4
 
 import chisel3._
+
 import org.chipsalliance.cde.config.Parameters
+
+import org.chipsalliance.diplomacy.lazymodule.{LazyModule, LazyModuleImp, SimpleLazyModule}
+
 import freechips.rocketchip.devices.tilelink._
-import freechips.rocketchip.diplomacy._
+import freechips.rocketchip.diplomacy.{AddressSet, BufferParams}
 import freechips.rocketchip.regmapper.{RRTest0, RRTest1}
 import freechips.rocketchip.tilelink._
 import freechips.rocketchip.unittest._
@@ -39,6 +43,7 @@ class AXI4LiteFuzzRAM(txns: Int)(implicit p: Parameters) extends LazyModule
 class AXI4LiteFuzzRAMTest(txns: Int = 5000, timeout: Int = 500000)(implicit p: Parameters) extends UnitTest(timeout) {
   val dut = Module(LazyModule(new AXI4LiteFuzzRAM(txns)).module)
   io.finished := dut.io.finished
+  dut.io.start := io.start
 }
 
 class AXI4LiteUserBitsFuzzRAM(txns: Int)(implicit p: Parameters) extends LazyModule
@@ -62,6 +67,7 @@ class AXI4LiteUserBitsFuzzRAM(txns: Int)(implicit p: Parameters) extends LazyMod
 class AXI4LiteUserBitsFuzzRAMTest(txns: Int = 5000, timeout: Int = 500000)(implicit p: Parameters) extends UnitTest(timeout) {
   val dut = Module(LazyModule(new AXI4LiteUserBitsFuzzRAM(txns)).module)
   io.finished := dut.io.finished
+  dut.io.start := io.start
 }
 
 class AXI4FullFuzzRAM(txns: Int)(implicit p: Parameters) extends LazyModule
@@ -85,6 +91,7 @@ class AXI4FullFuzzRAM(txns: Int)(implicit p: Parameters) extends LazyModule
 class AXI4FullFuzzRAMTest(txns: Int = 5000, timeout: Int = 500000)(implicit p: Parameters) extends UnitTest(timeout) {
   val dut = Module(LazyModule(new AXI4FullFuzzRAM(txns)).module)
   io.finished := dut.io.finished
+  dut.io.start := io.start
 }
 
 trait HasFuzzTarget {
@@ -158,4 +165,5 @@ class AXI4FuzzBridge(txns: Int)(implicit p: Parameters) extends LazyModule
 class AXI4BridgeTest(txns: Int = 5000, timeout: Int = 500000)(implicit p: Parameters) extends UnitTest(timeout) {
   val dut = Module(LazyModule(new AXI4FuzzBridge(txns)).module)
   io.finished := dut.io.finished
+  dut.io.start := io.start
 }

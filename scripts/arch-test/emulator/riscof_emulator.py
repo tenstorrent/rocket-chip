@@ -107,30 +107,10 @@ class emulator(pluginTemplate):
           self.isa += 'd'
       if "C" in ispec["ISA"]:
           self.isa += 'c'
-      if "Zba" in ispec["ISA"]:
-          self.isa += '_Zba'
-      if "Zbb" in ispec["ISA"]:
-          self.isa += '_Zbb'
-      if "Zbc" in ispec["ISA"]:
-          self.isa += '_Zbc'
-      if "Zbkb" in ispec["ISA"]:
-          self.isa += '_Zbkb'
-      if "Zbkc" in ispec["ISA"]:
-          self.isa += '_Zbkc'
-      if "Zbkx" in ispec["ISA"]:
-          self.isa += '_Zbkx'
-      if "Zbs" in ispec["ISA"]:
-          self.isa += '_Zbs'
-      if "Zknd" in ispec["ISA"]:
-          self.isa += '_Zknd'
-      if "Zkne" in ispec["ISA"]:
-          self.isa += '_Zkne'
-      if "Zknh" in ispec["ISA"]:
-          self.isa += '_Zknh'
-      if "Zksed" in ispec["ISA"]:
-          self.isa += '_Zksed'
-      if "Zksh" in ispec["ISA"]:
-          self.isa += '_Zksh'
+      if "Zicsr" in ispec["ISA"]:
+          self.isa += '_Zicsr'
+      if "Zifencei" in ispec["ISA"]:
+          self.isa += '_Zifencei'
 
       #TODO: The following assumes you are using the riscv-gcc toolchain. If
       #      not please change appropriately

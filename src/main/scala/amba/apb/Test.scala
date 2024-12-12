@@ -3,10 +3,14 @@
 package freechips.rocketchip.amba.apb
 
 import chisel3._
+
 import org.chipsalliance.cde.config.Parameters
-import freechips.rocketchip.diplomacy._
+
+import org.chipsalliance.diplomacy.lazymodule.{LazyModule, LazyModuleImp}
+
+import freechips.rocketchip.diplomacy.{BufferParams, AddressSet}
 import freechips.rocketchip.regmapper.{RRTest0, RRTest1}
-import freechips.rocketchip.tilelink._
+import freechips.rocketchip.tilelink.{TLFuzzer, TLRAMModel, TLToAPB, TLDelayer, TLBuffer, TLFragmenter}
 import freechips.rocketchip.unittest._
 
 class APBRRTest0(address: BigInt)(implicit p: Parameters) 
@@ -45,4 +49,5 @@ class APBFuzzBridge(aFlow: Boolean, txns: Int)(implicit p: Parameters) extends L
 class APBBridgeTest(aFlow: Boolean, txns: Int = 5000, timeout: Int = 500000)(implicit p: Parameters) extends UnitTest(timeout) {
   val dut = Module(LazyModule(new APBFuzzBridge(aFlow, txns)).module)
   io.finished := dut.io.finished
+  dut.io.start := io.start
 }

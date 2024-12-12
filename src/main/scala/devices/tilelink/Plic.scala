@@ -3,20 +3,24 @@
 package freechips.rocketchip.devices.tilelink
 
 import chisel3._
+import chisel3.experimental._
 import chisel3.util._
-import freechips.rocketchip.util.CompileOptions.NotStrictInferReset
-import org.chipsalliance.cde.config.{Field, Parameters}
-import freechips.rocketchip.subsystem._
-import freechips.rocketchip.diplomacy._
-import freechips.rocketchip.regmapper._
-import freechips.rocketchip.tilelink._
-import freechips.rocketchip.interrupts._
-import freechips.rocketchip.util._
-import freechips.rocketchip.util.property
-import freechips.rocketchip.prci.{ClockSinkDomain}
-import chisel3.internal.sourceinfo.SourceInfo
+
+import org.chipsalliance.cde.config._
+import org.chipsalliance.diplomacy.lazymodule._
+
+import freechips.rocketchip.diplomacy.{AddressSet}
+import freechips.rocketchip.resources.{Description, Resource, ResourceBinding, ResourceBindings, ResourceInt, SimpleDevice}
+import freechips.rocketchip.interrupts.{IntNexusNode, IntSinkParameters, IntSinkPortParameters, IntSourceParameters, IntSourcePortParameters}
+import freechips.rocketchip.regmapper.{RegField, RegFieldDesc, RegFieldRdAction, RegFieldWrType, RegReadFn, RegWriteFn}
+import freechips.rocketchip.subsystem.{BaseSubsystem, CBUS, TLBusWrapperLocation}
+import freechips.rocketchip.tilelink.{TLFragmenter, TLRegisterNode}
+import freechips.rocketchip.util.{Annotated, MuxT, property}
 
 import scala.math.min
+
+import freechips.rocketchip.util.UIntToAugmentedUInt
+import freechips.rocketchip.util.SeqToAugmentedSeq
 
 class GatewayPLICIO extends Bundle {
   val valid = Output(Bool())
@@ -180,12 +184,14 @@ class TLPLIC(params: PLICParams, beatBytes: Int)(implicit p: Parameters) extends
     
     val maxDevs = Reg(Vec(nHarts, UInt(log2Ceil(nDevices+1).W)))
     val pendingUInt = Cat(pending.reverse)
-    for (hart <- 0 until nHarts) {
-      val fanin = Module(new PLICFanIn(nDevices, prioBits))
-      fanin.io.prio := priority
-      fanin.io.ip   := enableVec(hart) & pendingUInt
-      maxDevs(hart) := fanin.io.dev
-      harts(hart)   := ShiftRegister(RegNext(fanin.io.max) > threshold(hart), params.intStages)
+    if(nDevices > 0) {
+      for (hart <- 0 until nHarts) {
+        val fanin = Module(new PLICFanIn(nDevices, prioBits))
+        fanin.io.prio := priority
+        fanin.io.ip := enableVec(hart) & pendingUInt
+        maxDevs(hart) := fanin.io.dev
+        harts(hart) := ShiftRegister(RegNext(fanin.io.max) > threshold(hart), params.intStages)
+      }
     }
 
     // Priority registers are 32-bit aligned so treat each as its own group.
@@ -354,15 +360,14 @@ class PLICFanIn(nDevices: Int, prioBits: Int) extends Module {
 
 /** Trait that will connect a PLIC to a subsystem */
 trait CanHavePeripheryPLIC { this: BaseSubsystem =>
-  val plicOpt  = p(PLICKey).map { params =>
+  val (plicOpt, plicDomainOpt) = p(PLICKey).map { params =>
     val tlbus = locateTLBusWrapper(p(PLICAttachKey).slaveWhere)
-    val plicDomainWrapper = LazyModule(new ClockSinkDomain(take = None))
-    plicDomainWrapper.clockNode := tlbus.fixedClockNode
+    val plicDomainWrapper = tlbus.generateSynchronousDomain("PLIC").suggestName("plic_domain")
 
     val plic = plicDomainWrapper { LazyModule(new TLPLIC(params, tlbus.beatBytes)) }
-    plic.node := tlbus.coupleTo("plic") { TLFragmenter(tlbus) := _ }
-    plic.intnode :=* ibus.toPLIC
+    plicDomainWrapper { plic.node := tlbus.coupleTo("plic") { TLFragmenter(tlbus, Some("PLIC")) := _ } }
+    plicDomainWrapper { plic.intnode :=* ibus.toPLIC }
 
-    plic
-  }
+    (plic, plicDomainWrapper)
+  }.unzip
 }

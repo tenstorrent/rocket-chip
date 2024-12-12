@@ -4,11 +4,14 @@ package freechips.rocketchip.tilelink
 
 import chisel3._
 import chisel3.util._
-import chisel3.internal.sourceinfo.SourceLine
-import org.chipsalliance.cde.config.Parameters
-import freechips.rocketchip.diplomacy._
+import chisel3.experimental.SourceLine
+
+import org.chipsalliance.cde.config._
+import org.chipsalliance.diplomacy._
+
+import freechips.rocketchip.diplomacy.EnableMonitors
+import freechips.rocketchip.formal.{MonitorDirection, IfThen, Property, PropertyClass, TestplanTestType, TLMonitorStrictMode}
 import freechips.rocketchip.util.PlusArg
-import freechips.rocketchip.formal._
 
 case class TLMonitorArgs(edge: TLEdge)
 
@@ -380,7 +383,7 @@ class TLMonitor(args: TLMonitorArgs, monitorDir: MonitorDirection = MonitorDirec
   }
 
   def legalizeMultibeatA(a: DecoupledIO[TLBundleA], edge: TLEdge): Unit = {
-    val a_first = edge.first(a.bits, a.fire())
+    val a_first = edge.first(a.bits, a.fire)
     val opcode  = Reg(UInt())
     val param   = Reg(UInt())
     val size    = Reg(UInt())
@@ -393,7 +396,7 @@ class TLMonitor(args: TLMonitorArgs, monitorDir: MonitorDirection = MonitorDirec
       monAssert (a.bits.source === source, "'A' channel source changed within multibeat operation" + extra)
       monAssert (a.bits.address=== address,"'A' channel address changed with multibeat operation" + extra)
     }
-    when (a.fire() && a_first) {
+    when (a.fire && a_first) {
       opcode  := a.bits.opcode
       param   := a.bits.param
       size    := a.bits.size
@@ -403,7 +406,7 @@ class TLMonitor(args: TLMonitorArgs, monitorDir: MonitorDirection = MonitorDirec
   }
 
   def legalizeMultibeatB(b: DecoupledIO[TLBundleB], edge: TLEdge): Unit = {
-    val b_first = edge.first(b.bits, b.fire())
+    val b_first = edge.first(b.bits, b.fire)
     val opcode  = Reg(UInt())
     val param   = Reg(UInt())
     val size    = Reg(UInt())
@@ -416,7 +419,7 @@ class TLMonitor(args: TLMonitorArgs, monitorDir: MonitorDirection = MonitorDirec
       monAssert (b.bits.source === source, "'B' channel source changed within multibeat operation" + extra)
       monAssert (b.bits.address=== address,"'B' channel addresss changed with multibeat operation" + extra)
     }
-    when (b.fire() && b_first) {
+    when (b.fire && b_first) {
       opcode  := b.bits.opcode
       param   := b.bits.param
       size    := b.bits.size
@@ -456,14 +459,14 @@ class TLMonitor(args: TLMonitorArgs, monitorDir: MonitorDirection = MonitorDirec
     val my_opcode    = Reg(UInt())
     val my_size      = Reg(UInt())
 
-    val a_first = bundle.a.valid && edge.first(bundle.a.bits, bundle.a.fire())
-    val d_first = bundle.d.valid && edge.first(bundle.d.bits, bundle.d.fire())
+    val a_first = bundle.a.valid && edge.first(bundle.a.bits, bundle.a.fire)
+    val d_first = bundle.d.valid && edge.first(bundle.d.bits, bundle.d.fire)
 
     val my_a_first_beat = a_first && (bundle.a.bits.source === sym_source)
     val my_d_first_beat = d_first && (bundle.d.bits.source === sym_source)
 
-    val my_clr_resp_pend = (bundle.d.fire() && my_d_first_beat)
-    val my_set_resp_pend = (bundle.a.fire() && my_a_first_beat && !my_clr_resp_pend)
+    val my_clr_resp_pend = (bundle.d.fire && my_d_first_beat)
+    val my_set_resp_pend = (bundle.a.fire && my_a_first_beat && !my_clr_resp_pend)
     when (my_set_resp_pend) {
       my_resp_pend := true.B
     } .elsewhen (my_clr_resp_pend) {
@@ -508,7 +511,7 @@ class TLMonitor(args: TLMonitorArgs, monitorDir: MonitorDirection = MonitorDirec
   }
 
   def legalizeMultibeatC(c: DecoupledIO[TLBundleC], edge: TLEdge): Unit = {
-    val c_first = edge.first(c.bits, c.fire())
+    val c_first = edge.first(c.bits, c.fire)
     val opcode  = Reg(UInt())
     val param   = Reg(UInt())
     val size    = Reg(UInt())
@@ -521,7 +524,7 @@ class TLMonitor(args: TLMonitorArgs, monitorDir: MonitorDirection = MonitorDirec
       monAssert (c.bits.source === source, "'C' channel source changed within multibeat operation" + extra)
       monAssert (c.bits.address=== address,"'C' channel address changed with multibeat operation" + extra)
     }
-    when (c.fire() && c_first) {
+    when (c.fire && c_first) {
       opcode  := c.bits.opcode
       param   := c.bits.param
       size    := c.bits.size
@@ -531,7 +534,7 @@ class TLMonitor(args: TLMonitorArgs, monitorDir: MonitorDirection = MonitorDirec
   }
 
   def legalizeMultibeatD(d: DecoupledIO[TLBundleD], edge: TLEdge): Unit = {
-    val d_first = edge.first(d.bits, d.fire())
+    val d_first = edge.first(d.bits, d.fire)
     val opcode  = Reg(UInt())
     val param   = Reg(UInt())
     val size    = Reg(UInt())
@@ -546,7 +549,7 @@ class TLMonitor(args: TLMonitorArgs, monitorDir: MonitorDirection = MonitorDirec
       assume (d.bits.sink   === sink,   "'D' channel sink changed with multibeat operation" + extra)
       assume (d.bits.denied === denied, "'D' channel denied changed with multibeat operation" + extra)
     }
-    when (d.fire() && d_first) {
+    when (d.fire && d_first) {
       opcode  := d.bits.opcode
       param   := d.bits.param
       size    := d.bits.size
@@ -570,24 +573,24 @@ class TLMonitor(args: TLMonitorArgs, monitorDir: MonitorDirection = MonitorDirec
   def legalizeADSourceOld(bundle: TLBundle, edge: TLEdge): Unit = {
     val inflight = RegInit(0.U(edge.client.endSourceId.W))
 
-    val a_first = edge.first(bundle.a.bits, bundle.a.fire())
-    val d_first = edge.first(bundle.d.bits, bundle.d.fire())
+    val a_first = edge.first(bundle.a.bits, bundle.a.fire)
+    val d_first = edge.first(bundle.d.bits, bundle.d.fire)
 
     val a_set = WireInit(0.U(edge.client.endSourceId.W))
-    when (bundle.a.fire() && a_first && edge.isRequest(bundle.a.bits)) {
+    when (bundle.a.fire && a_first && edge.isRequest(bundle.a.bits)) {
       a_set := UIntToOH(bundle.a.bits.source)
       assert(!inflight(bundle.a.bits.source), "'A' channel re-used a source ID" + extra)
     }
 
     val d_clr = WireInit(0.U(edge.client.endSourceId.W))
     val d_release_ack = bundle.d.bits.opcode === TLMessages.ReleaseAck
-    when (bundle.d.fire() && d_first && edge.isResponse(bundle.d.bits) && !d_release_ack) {
+    when (bundle.d.fire && d_first && edge.isResponse(bundle.d.bits) && !d_release_ack) {
       d_clr := UIntToOH(bundle.d.bits.source)
       assume((a_set | inflight)(bundle.d.bits.source), "'D' channel acknowledged for nothing inflight" + extra)
     }
 
     if (edge.manager.minLatency > 0) {
-      assume(a_set =/= d_clr || !a_set.orR, s"'A' and 'D' concurrent, despite minlatency ${edge.manager.minLatency}" + extra)
+      assume(a_set =/= d_clr || !a_set.orR, s"'A' and 'D' concurrent, despite minlatency > 0" + extra)
     }
 
     inflight := (inflight | a_set) & ~d_clr
@@ -598,7 +601,7 @@ class TLMonitor(args: TLMonitorArgs, monitorDir: MonitorDirection = MonitorDirec
     assert (!inflight.orR || limit === 0.U || watchdog < limit, "TileLink timeout expired" + extra)
 
     watchdog := watchdog + 1.U
-    when (bundle.a.fire() || bundle.d.fire()) { watchdog := 0.U }
+    when (bundle.a.fire || bundle.d.fire) { watchdog := 0.U }
   }
 
   def legalizeADSource(bundle: TLBundle, edge: TLEdge): Unit = {
@@ -608,16 +611,16 @@ class TLMonitor(args: TLMonitorArgs, monitorDir: MonitorDirection = MonitorDirec
     val log_a_size_bus_size   = log2Ceil(a_size_bus_size)
     def size_to_numfullbits(x: UInt): UInt = (1.U << x) - 1.U //convert a number to that many full bits
 
-    val inflight = RegInit(0.U(edge.client.endSourceId.W))
+    val inflight = RegInit(0.U((2 max edge.client.endSourceId).W)) // size up to avoid width error
     inflight.suggestName("inflight")
     val inflight_opcodes = RegInit(0.U((edge.client.endSourceId << log_a_opcode_bus_size).W))
     inflight_opcodes.suggestName("inflight_opcodes")
     val inflight_sizes = RegInit(0.U((edge.client.endSourceId << log_a_size_bus_size).W))
     inflight_sizes.suggestName("inflight_sizes")
 
-    val a_first = edge.first(bundle.a.bits, bundle.a.fire())
+    val a_first = edge.first(bundle.a.bits, bundle.a.fire)
     a_first.suggestName("a_first")
-    val d_first = edge.first(bundle.d.bits, bundle.d.fire())
+    val d_first = edge.first(bundle.d.bits, bundle.d.fire)
     d_first.suggestName("d_first")
 
     val a_set          = WireInit(0.U(edge.client.endSourceId.W))
@@ -629,7 +632,7 @@ class TLMonitor(args: TLMonitorArgs, monitorDir: MonitorDirection = MonitorDirec
     val a_sizes_set = WireInit(0.U((edge.client.endSourceId << log_a_size_bus_size).W))
     a_sizes_set.suggestName("a_sizes_set")
 
-    val a_opcode_lookup = WireInit(0.U((1 << log_a_opcode_bus_size).W))
+    val a_opcode_lookup = WireInit(0.U((a_opcode_bus_size - 1).W))
     a_opcode_lookup.suggestName("a_opcode_lookup")
     a_opcode_lookup := ((inflight_opcodes) >> (bundle.d.bits.source << log_a_opcode_bus_size.U) & size_to_numfullbits(1.U << log_a_opcode_bus_size.U)) >> 1.U
 
@@ -649,7 +652,7 @@ class TLMonitor(args: TLMonitorArgs, monitorDir: MonitorDirection = MonitorDirec
       a_set_wo_ready := UIntToOH(bundle.a.bits.source)
     }
 
-    when (bundle.a.fire() && a_first && edge.isRequest(bundle.a.bits)) {
+    when (bundle.a.fire && a_first && edge.isRequest(bundle.a.bits)) {
       a_set                := UIntToOH(bundle.a.bits.source)
       a_opcodes_set_interm := (bundle.a.bits.opcode << 1.U) | 1.U
       a_sizes_set_interm   := (bundle.a.bits.size << 1.U) | 1.U
@@ -672,7 +675,7 @@ class TLMonitor(args: TLMonitorArgs, monitorDir: MonitorDirection = MonitorDirec
       d_clr_wo_ready := UIntToOH(bundle.d.bits.source)
     }
 
-    when (bundle.d.fire() && d_first && edge.isResponse(bundle.d.bits) && !d_release_ack) {
+    when (bundle.d.fire && d_first && edge.isResponse(bundle.d.bits) && !d_release_ack) {
       d_clr         := UIntToOH(bundle.d.bits.source)
       d_opcodes_clr := size_to_numfullbits(1.U << log_a_opcode_bus_size.U) << (bundle.d.bits.source << log_a_opcode_bus_size.U)
       d_sizes_clr   := size_to_numfullbits(1.U << log_a_size_bus_size.U) << (bundle.d.bits.source << log_a_size_bus_size.U)
@@ -696,7 +699,7 @@ class TLMonitor(args: TLMonitorArgs, monitorDir: MonitorDirection = MonitorDirec
     }
 
     if (edge.manager.minLatency > 0) {
-      assume(a_set_wo_ready =/= d_clr_wo_ready || !a_set_wo_ready.orR, s"'A' and 'D' concurrent, despite minlatency ${edge.manager.minLatency}" + extra)
+      assume(a_set_wo_ready =/= d_clr_wo_ready || !a_set_wo_ready.orR, s"'A' and 'D' concurrent, despite minlatency > 0" + extra)
     }
 
     inflight := (inflight | a_set) & ~d_clr
@@ -709,7 +712,7 @@ class TLMonitor(args: TLMonitorArgs, monitorDir: MonitorDirection = MonitorDirec
     monAssert (!inflight.orR || limit === 0.U || watchdog < limit, "TileLink timeout expired" + extra)
 
     watchdog := watchdog + 1.U
-    when (bundle.a.fire() || bundle.d.fire()) { watchdog := 0.U }
+    when (bundle.a.fire || bundle.d.fire) { watchdog := 0.U }
   }
 
   def legalizeCDSource(bundle: TLBundle, edge: TLEdge): Unit = {
@@ -720,15 +723,15 @@ class TLMonitor(args: TLMonitorArgs, monitorDir: MonitorDirection = MonitorDirec
     val log_c_size_bus_size   = log2Ceil(c_size_bus_size)
     def size_to_numfullbits(x: UInt): UInt = (1.U << x) - 1.U //convert a number to that many full bits
 
-    val inflight         = RegInit(0.U(edge.client.endSourceId.W))
+    val inflight         = RegInit(0.U((2 max edge.client.endSourceId).W))
     val inflight_opcodes = RegInit(0.U((edge.client.endSourceId << log_c_opcode_bus_size).W))
     val inflight_sizes   = RegInit(0.U((edge.client.endSourceId << log_c_size_bus_size).W))
     inflight.suggestName("inflight")
     inflight_opcodes.suggestName("inflight_opcodes")
     inflight_sizes.suggestName("inflight_sizes")
 
-    val c_first = edge.first(bundle.c.bits, bundle.c.fire())
-    val d_first = edge.first(bundle.d.bits, bundle.d.fire())
+    val c_first = edge.first(bundle.c.bits, bundle.c.fire)
+    val d_first = edge.first(bundle.d.bits, bundle.d.fire)
     c_first.suggestName("c_first")
     d_first.suggestName("d_first")
 
@@ -757,7 +760,7 @@ class TLMonitor(args: TLMonitorArgs, monitorDir: MonitorDirection = MonitorDirec
       c_set_wo_ready := UIntToOH(bundle.c.bits.source)
     }
 
-    when (bundle.c.fire() && c_first && edge.isRequest(bundle.c.bits)) {
+    when (bundle.c.fire && c_first && edge.isRequest(bundle.c.bits)) {
       c_set                := UIntToOH(bundle.c.bits.source)
       c_opcodes_set_interm := (bundle.c.bits.opcode << 1.U) | 1.U
       c_sizes_set_interm   := (bundle.c.bits.size << 1.U) | 1.U
@@ -782,7 +785,7 @@ class TLMonitor(args: TLMonitorArgs, monitorDir: MonitorDirection = MonitorDirec
       d_clr_wo_ready := UIntToOH(bundle.d.bits.source)
     }
 
-    when (bundle.d.fire() && d_first && edge.isResponse(bundle.d.bits) && d_release_ack) {
+    when (bundle.d.fire && d_first && edge.isResponse(bundle.d.bits) && d_release_ack) {
       d_clr         := UIntToOH(bundle.d.bits.source)
       d_opcodes_clr := size_to_numfullbits(1.U << log_c_opcode_bus_size.U) << (bundle.d.bits.source << log_c_opcode_bus_size.U)
       d_sizes_clr   := size_to_numfullbits(1.U << log_c_size_bus_size.U) << (bundle.d.bits.source << log_c_size_bus_size.U)
@@ -804,7 +807,7 @@ class TLMonitor(args: TLMonitorArgs, monitorDir: MonitorDirection = MonitorDirec
 
     if (edge.manager.minLatency > 0) {
       when (c_set_wo_ready.orR) {
-        assume(c_set_wo_ready =/= d_clr_wo_ready, s"'C' and 'D' concurrent, despite minlatency ${edge.manager.minLatency}" + extra)
+        assume(c_set_wo_ready =/= d_clr_wo_ready, s"'C' and 'D' concurrent, despite minlatency > 0" + extra)
       }
     }
 
@@ -818,23 +821,23 @@ class TLMonitor(args: TLMonitorArgs, monitorDir: MonitorDirection = MonitorDirec
     monAssert (!inflight.orR || limit === 0.U || watchdog < limit, "TileLink timeout expired" + extra)
 
     watchdog := watchdog + 1.U
-    when (bundle.c.fire() || bundle.d.fire()) { watchdog := 0.U }
+    when (bundle.c.fire || bundle.d.fire) { watchdog := 0.U }
   }
 
   def legalizeDESink(bundle: TLBundle, edge: TLEdge): Unit = {
     val inflight = RegInit(0.U(edge.manager.endSinkId.W))
 
-    val d_first = edge.first(bundle.d.bits, bundle.d.fire())
+    val d_first = edge.first(bundle.d.bits, bundle.d.fire)
     val e_first = true.B
 
     val d_set = WireInit(0.U(edge.manager.endSinkId.W))
-    when (bundle.d.fire() && d_first && edge.isRequest(bundle.d.bits)) {
+    when (bundle.d.fire && d_first && edge.isRequest(bundle.d.bits)) {
       d_set := UIntToOH(bundle.d.bits.sink)
       assume(!inflight(bundle.d.bits.sink), "'D' channel re-used a sink ID" + extra)
     }
 
     val e_clr = WireInit(0.U(edge.manager.endSinkId.W))
-    when (bundle.e.fire() && e_first && edge.isResponse(bundle.e.bits)) {
+    when (bundle.e.fire && e_first && edge.isResponse(bundle.e.bits)) {
       e_clr := UIntToOH(bundle.e.bits.sink)
       monAssert((d_set | inflight)(bundle.e.bits.sink), "'E' channel acknowledged for nothing inflight" + extra)
     }

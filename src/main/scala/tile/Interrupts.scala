@@ -2,12 +2,17 @@
 
 package freechips.rocketchip.tile
 
-import Chisel._
+import chisel3._
+import chisel3.util._
+import org.chipsalliance.cde.config._
+import org.chipsalliance.diplomacy._
 
-import org.chipsalliance.cde.config.Parameters
-import freechips.rocketchip.diplomacy._
-import freechips.rocketchip.interrupts._
-import freechips.rocketchip.util._
+import freechips.rocketchip.resources.{Device, DeviceSnippet, Description, ResourceBinding, ResourceInt}
+import freechips.rocketchip.interrupts.{IntIdentityNode, IntSinkNode, IntSinkPortSimple, IntSourceNode, IntSourcePortSimple}
+import freechips.rocketchip.util.CanHaveErrors
+
+import freechips.rocketchip.resources.{IntToProperty, StringToProperty}
+import freechips.rocketchip.util.BooleanToAugmentedBoolean
 
 class NMI(val w: Int) extends Bundle {
   val rnmi = Bool()

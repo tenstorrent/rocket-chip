@@ -2,16 +2,30 @@
 
 package freechips.rocketchip.tilelink
 
-import Chisel._
-import org.chipsalliance.cde.config.Parameters
-import freechips.rocketchip.diplomacy._
+import chisel3._
+import chisel3.util._
+
+import org.chipsalliance.cde.config._
+import org.chipsalliance.diplomacy._
+import org.chipsalliance.diplomacy.bundlebridge._
+import org.chipsalliance.diplomacy.lazymodule._
+import org.chipsalliance.diplomacy.nodes._
+
+import freechips.rocketchip.diplomacy.{AddressSet, NoHandle, NodeHandle, NodeBinding}
 
 // TODO This class should be moved to package subsystem to resolve
 //      the dependency awkwardness of the following imports
-import freechips.rocketchip.devices.tilelink._
-import freechips.rocketchip.prci._
-import freechips.rocketchip.subsystem._
-import freechips.rocketchip.util._
+import freechips.rocketchip.devices.tilelink.{BuiltInDevices, CanHaveBuiltInDevices}
+import freechips.rocketchip.prci.{
+  ClockParameters, ClockDomain, ClockGroup, ClockGroupAggregator, ClockSinkNode,
+  FixedClockBroadcast, ClockGroupEdgeParameters, ClockSinkParameters, ClockSinkDomain,
+  ClockGroupEphemeralNode, asyncMux, ClockCrossingType, NoCrossing
+}
+import freechips.rocketchip.subsystem.{
+  HasTileLinkLocations, CanConnectWithinContextThatHasTileLinkLocations,
+  CanInstantiateWithinContextThatHasTileLinkLocations
+}
+import freechips.rocketchip.util.Location
 
 /** Specifies widths of various attachement points in the SoC */
 trait HasTLBusParams {
@@ -34,8 +48,6 @@ abstract class TLBusWrapper(params: HasTLBusParams, val busName: String)(implici
     extends ClockDomain
     with HasTLBusParams
     with CanHaveBuiltInDevices
-    with CanAttachTLSlaves
-    with CanAttachTLMasters
 {
   private val clockGroupAggregator = LazyModule(new ClockGroupAggregator(busName){ override def shouldBeInlined = true }).suggestName(busName + "_clock_groups")
   private val clockGroup = LazyModule(new ClockGroup(busName){ override def shouldBeInlined = true })
@@ -73,15 +85,21 @@ abstract class TLBusWrapper(params: HasTLBusParams, val busName: String)(implici
   def unifyManagers: List[TLManagerParameters] = ManagerUnification(busView.manager.managers)
   def crossOutHelper = this.crossOut(outwardNode)(ValName("bus_xing"))
   def crossInHelper = this.crossIn(inwardNode)(ValName("bus_xing"))
+  def generateSynchronousDomain(domainName: String): ClockSinkDomain = {
+    val domain = LazyModule(new ClockSinkDomain(take = fixedClockOpt, name = Some(domainName)))
+    domain.clockNode := fixedClockNode
+    domain
+  }
+  def generateSynchronousDomain: ClockSinkDomain = generateSynchronousDomain("")
 
   protected val addressPrefixNexusNode = BundleBroadcast[UInt](registered = false, default = Some(() => 0.U(1.W)))
 
   def to[T](name: String)(body: => T): T = {
-    this { LazyScope(s"coupler_to_${name}", "TLInterconnectCoupler") { body } }
+    this { LazyScope(s"coupler_to_${name}", s"TLInterconnectCoupler_${busName}_to_${name}") { body } }
   }
 
   def from[T](name: String)(body: => T): T = {
-    this { LazyScope(s"coupler_from_${name}", "TLInterconnectCoupler") { body } }
+    this { LazyScope(s"coupler_from_${name}", s"TLInterconnectCoupler_${busName}_from_${name}") { body } }
   }
 
   def coupleTo[T](name: String)(gen: TLOutwardNode => T): T =
@@ -90,15 +108,15 @@ abstract class TLBusWrapper(params: HasTLBusParams, val busName: String)(implici
   def coupleFrom[T](name: String)(gen: TLInwardNode => T): T =
     from(name) { gen(inwardNode :*=* TLNameNode("tl")) }
 
-  def crossToBus(bus: TLBusWrapper, xType: ClockCrossingType)(implicit asyncClockGroupNode: ClockGroupEphemeralNode): NoHandle = {
-    bus.clockGroupNode := asyncMux(xType, asyncClockGroupNode, this.clockGroupNode)
+  def crossToBus(bus: TLBusWrapper, xType: ClockCrossingType, allClockGroupNode: ClockGroupEphemeralNode): NoHandle = {
+    bus.clockGroupNode := asyncMux(xType, allClockGroupNode, this.clockGroupNode)
     coupleTo(s"bus_named_${bus.busName}") {
       bus.crossInHelper(xType) :*= TLWidthWidget(beatBytes) :*= _
     }
   }
 
-  def crossFromBus(bus: TLBusWrapper, xType: ClockCrossingType)(implicit asyncClockGroupNode: ClockGroupEphemeralNode): NoHandle = {
-    bus.clockGroupNode := asyncMux(xType, asyncClockGroupNode, this.clockGroupNode)
+  def crossFromBus(bus: TLBusWrapper, xType: ClockCrossingType, allClockGroupNode: ClockGroupEphemeralNode): NoHandle = {
+    bus.clockGroupNode := asyncMux(xType, allClockGroupNode, this.clockGroupNode)
     coupleFrom(s"bus_named_${bus.busName}") {
       _ :=* TLWidthWidget(bus.beatBytes) :=* bus.crossOutHelper(xType)
     }
@@ -179,8 +197,8 @@ class TLBusWrapperConnection
     val masterTLBus = context.locateTLBusWrapper(master)
     val slaveTLBus  = context.locateTLBusWrapper(slave)
     def bindClocks(implicit p: Parameters) = driveClockFromMaster match {
-      case Some(true)  => slaveTLBus.clockGroupNode  := asyncMux(xType, context.asyncClockGroupsNode, masterTLBus.clockGroupNode)
-      case Some(false) => masterTLBus.clockGroupNode := asyncMux(xType, context.asyncClockGroupsNode, slaveTLBus.clockGroupNode)
+      case Some(true)  => slaveTLBus.clockGroupNode  := asyncMux(xType, context.allClockGroupsNode, masterTLBus.clockGroupNode)
+      case Some(false) => masterTLBus.clockGroupNode := asyncMux(xType, context.allClockGroupsNode, slaveTLBus.clockGroupNode)
       case None =>
     }
     def bindTLNodes(implicit p: Parameters) = nodeBinding match {
@@ -218,158 +236,8 @@ class TLBusWrapperTopology(
   }
 }
 
-trait CanAttachTLSlaves extends HasTLBusParams { this: TLBusWrapper =>
-
-  def toTile
-      (name: Option[String] = None, buffer: BufferParams = BufferParams.none)
-      (gen: => TLInwardNode): NoHandle = {
-    to("tile" named name) { FlipRendering { implicit p =>
-      gen :*= TLWidthWidget(beatBytes) :*= TLBuffer(buffer) :*= outwardNode
-    }}
-  }
-
-  def toDRAMController[D,U,E,B <: Data]
-      (name: Option[String] = None, buffer: BufferParams = BufferParams.none)
-      (gen: => NodeHandle[ TLClientPortParameters,TLManagerPortParameters,TLEdgeIn,TLBundle, D,U,E,B] =
-        TLNameNode(name)): OutwardNodeHandle[D,U,E,B] = {
-    to("memory_controller" named name) { gen :*= TLWidthWidget(beatBytes) :*= TLBuffer(buffer) :*= outwardNode }
-  }
-
-  @deprecated("Replace with e.g. bus.coupleTo(s\"slave_named_${name}\"){ slave.controlXing(NoCrossing) :*= _ }", "rocket-chip 1.3")
-  def toSlave[D,U,E,B <: Data]
-      (name: Option[String] = None, buffer: BufferParams = BufferParams.none)
-      (gen: => NodeHandle[TLClientPortParameters,TLManagerPortParameters,TLEdgeIn,TLBundle,D,U,E,B] =
-        TLNameNode(name)): OutwardNodeHandle[D,U,E,B] = {
-    to("slave" named name) { gen :*= TLBuffer(buffer) :*= outwardNode }
-  }
-
-  @deprecated("Replace with e.g. bus.coupleTo(s\"slave_named_${name}\"){ node :*= TLFragmenter(bus.beatBytes, bus.blockBytes) :*= _ }", "rocket-chip 1.3")
-  def toVariableWidthSlaveNode(name: Option[String] = None, buffer: BufferParams = BufferParams.none)(node: TLInwardNode): Unit = {
-    toVariableWidthSlaveNodeOption(name, buffer)(Some(node))
-  }
-
-  @deprecated("Replace with e.g. node.foreach { n => bus.coupleTo(s\"slave_named_${name}\"){ b => n :*= TLFragmenter(bus.beatBytes, bus.blockBytes) :*= b } }", "rocket-chip 1.3")
-  def toVariableWidthSlaveNodeOption(name: Option[String] = None, buffer: BufferParams = BufferParams.none)(node: Option[TLInwardNode]): Unit = {
-    node foreach { n => to("slave" named name) {
-      n :*= TLFragmenter(beatBytes, blockBytes) :*= TLBuffer(buffer) :*= outwardNode
-    }}
-  }
-
-  @deprecated("Replace with e.g. bus.coupleTo(s\"slave_named_${name}\"){ slave.controlXing(NoCrossing) :*= TLFragmenter(bus.beatBytes, bus.blockBytes) :*= _ }", "rocket-chip 1.3")
-  def toVariableWidthSlave[D,U,E,B <: Data]
-      (name: Option[String] = None, buffer: BufferParams = BufferParams.none)
-      (gen: => NodeHandle[TLClientPortParameters,TLManagerPortParameters,TLEdgeIn,TLBundle,D,U,E,B] =
-        TLNameNode(name)): OutwardNodeHandle[D,U,E,B] = {
-    to("slave" named name) {
-      gen :*= TLFragmenter(beatBytes, blockBytes) :*= TLBuffer(buffer) :*= outwardNode
-    }
-  }
-
-  @deprecated("Replace with e.g. bus.coupleTo(s\"slave_named_${name}\"){ slave.control :*= TLWidthWidget(bus.beatBytes) :*= node }", "rocket-chip 1.3")
-  def toFixedWidthSlaveNode(name: Option[String] = None, buffer: BufferParams = BufferParams.none)(gen: TLInwardNode): Unit = {
-    to("slave" named name) { gen :*= TLWidthWidget(beatBytes) :*= TLBuffer(buffer) :*= outwardNode }
-  }
-
-  @deprecated("Replace with e.g. bus.coupleTo(s\"slave_named_${name}\"){ slave.controlXing(NoCrossing) :*= TLWidthWidget(bus.beatBytes) :*= _ }", "rocket-chip 1.3")
-  def toFixedWidthSlave[D,U,E,B <: Data]
-      (name: Option[String] = None, buffer: BufferParams = BufferParams.none)
-      (gen: => NodeHandle[TLClientPortParameters,TLManagerPortParameters,TLEdgeIn,TLBundle,D,U,E,B] =
-        TLNameNode(name)): OutwardNodeHandle[D,U,E,B] = {
-    to("slave" named name) { gen :*= TLWidthWidget(beatBytes) :*= TLBuffer(buffer) :*= outwardNode }
-  }
-
-  @deprecated("Replace with e.g. bus.coupleTo(s\"slave_named_${name}\"){ slave.controlXing(NoCrossing) :*= TLFragmenter(widthBytes, bus.blockBytes) :*= TLWidthWidget(bus.beatBytes) :*= node }", "rocket-chip 1.3")
-  def toFixedWidthSingleBeatSlaveNode
-      (widthBytes: Int, name: Option[String] = None, buffer: BufferParams = BufferParams.none)
-      (gen: TLInwardNode): Unit = {
-    to("slave" named name) {
-      gen :*= TLFragmenter(widthBytes, blockBytes) :*= TLWidthWidget(beatBytes) :*= TLBuffer(buffer) :*= outwardNode
-    }
-  }
-
-  @deprecated("Replace with e.g. bus.coupleTo(s\"slave_named_${name}\"){ slave.controlXing(NoCrossing) :*= TLFragmenter(widthBytes, bus.blockBytes) :*= TLWidthWidget(bus.beatBytes) :*= _ }", "rocket-chip 1.3")
-  def toFixedWidthSingleBeatSlave[D,U,E,B <: Data]
-      (widthBytes: Int, name: Option[String] = None, buffer: BufferParams = BufferParams.none)
-      (gen: => NodeHandle[TLClientPortParameters,TLManagerPortParameters,TLEdgeIn,TLBundle,D,U,E,B] =
-        TLNameNode(name)): OutwardNodeHandle[D,U,E,B] = {
-    to("slave" named name) {
-      gen :*= TLFragmenter(widthBytes, blockBytes) :*= TLWidthWidget(beatBytes) :*= TLBuffer(buffer) :*= outwardNode
-    }
-  }
-
-  @deprecated("Replace with e.g. bus.coupleTo(s\"slave_named_${name}\"){ slave.controlXing(NoCrossing) :*= TLFragmenter(bus.beatBytes, <maxXferBytes>) :*= _ }", "rocket-chip 1.3")
-  def toLargeBurstSlave[D,U,E,B <: Data]
-      (maxXferBytes: Int, name: Option[String] = None, buffer: BufferParams = BufferParams.none)
-      (gen: => NodeHandle[TLClientPortParameters,TLManagerPortParameters,TLEdgeIn,TLBundle,D,U,E,B] =
-        TLNameNode(name)): OutwardNodeHandle[D,U,E,B] = {
-    to("slave" named name) {
-      gen :*= TLFragmenter(beatBytes, maxXferBytes) :*= TLBuffer(buffer) :*= outwardNode
-    }
-  }
-
-  @deprecated("Replace with e.g. bus.coupleTo(s\"slave_named_${name}\"){ slave.controlXing(NoCrossing) :*= TLFragmenter(bus.beatBytes, <maxXferBytes>) :*= _ }", "rocket-chip 1.3")
-  def toFixedWidthPort[D,U,E,B <: Data]
-      (name: Option[String] = None, buffer: BufferParams = BufferParams.none)
-      (gen: => NodeHandle[TLClientPortParameters,TLManagerPortParameters,TLEdgeIn,TLBundle,D,U,E,B] =
-        TLNameNode(name)): OutwardNodeHandle[D,U,E,B] = {
-    to("port" named name) {
-      gen := TLWidthWidget(beatBytes) :*= TLBuffer(buffer) :*= outwardNode
-    }
-  }
-}
-
-trait CanAttachTLMasters extends HasTLBusParams { this: TLBusWrapper =>
-  def fromTile
-      (name: Option[String], buffer: BufferParams = BufferParams.none, cork: Option[Boolean] = None)
-      (gen: => TLOutwardNode): NoHandle = {
-    from("tile" named name) {
-      inwardNode :=* TLBuffer(buffer) :=* TLFIFOFixer(TLFIFOFixer.allVolatile) :=* gen
-    }
-  }
-
-  @deprecated("Replace with e.g. bus.coupleFrom(s\"master_named_${name}\"){ _ :=* TLFIFOFixer(TLFIFOFixer.all) :=* node }", "rocket-chip 1.3")
-  def fromMasterNode
-      (name: Option[String] = None, buffer: BufferParams = BufferParams.none)
-      (gen: TLOutwardNode): Unit = {
-    from("master" named name) {
-      inwardNode :=* TLBuffer(buffer) :=* TLFIFOFixer(TLFIFOFixer.all) :=* gen
-    }
-  }
-
-  @deprecated("Replace with e.g. bus.coupleFrom(s\"master_named_${name}\"){ _ :=* TLFIFOFixer(TLFIFOFixer.all) :=* master.node }", "rocket-chip 1.3")
-  def fromMaster[D,U,E,B <: Data]
-      (name: Option[String] = None, buffer: BufferParams = BufferParams.none)
-      (gen: => NodeHandle[D,U,E,B,TLClientPortParameters,TLManagerPortParameters,TLEdgeOut,TLBundle] =
-        TLNameNode(name)): InwardNodeHandle[D,U,E,B] = {
-    from("master" named name) {
-      inwardNode :=* TLBuffer(buffer) :=* TLFIFOFixer(TLFIFOFixer.all) :=* gen
-    }
-  }
-
-  // TODO also deprecate this once debug module isn't using it
-  //@deprecated("Replace with e.g. bus.coupleFrom(s\"port_named_${name}\"){ _ :=* TLFIFOFixer(TLFIFOFixer.all) :=* master.node }", "rocket-chip 1.3")
-  def fromPort[D,U,E,B <: Data]
-      (name: Option[String] = None, buffer: BufferParams = BufferParams.none)
-      (gen: => NodeHandle[D,U,E,B,TLClientPortParameters,TLManagerPortParameters,TLEdgeOut,TLBundle] =
-        TLNameNode(name)): InwardNodeHandle[D,U,E,B] = {
-    from("port" named name) {
-      inwardNode :=* TLBuffer(buffer) :=* TLFIFOFixer(TLFIFOFixer.all) :=* gen
-    }
-  }
-
-  @deprecated("Replace with e.g. bus.coupleFrom(s\"coherent_master_named_${name}\"){ _ :=* TLFIFOFixer(TLFIFOFixer.all) :=* master.node }", "rocket-chip 1.3")
-  def fromCoherentMaster[D,U,E,B <: Data]
-      (name: Option[String] = None, buffer: BufferParams = BufferParams.none)
-      (gen: => NodeHandle[D,U,E,B,TLClientPortParameters,TLManagerPortParameters,TLEdgeOut,TLBundle] =
-        TLNameNode(name)): InwardNodeHandle[D,U,E,B] = {
-    from("coherent_master" named name) {
-      inwardNode :=* TLBuffer(buffer) :=* TLFIFOFixer(TLFIFOFixer.all) :=* gen
-    }
-  }
-}
-
 trait HasTLXbarPhy { this: TLBusWrapper =>
-  private val xbar = LazyModule(new TLXbar).suggestName(busName + "_xbar")
+  private val xbar = LazyModule(new TLXbar(nameSuffix = Some(busName))).suggestName(busName + "_xbar")
 
   override def shouldBeInlined = xbar.node.circuitIdentity
   def inwardNode: TLInwardNode = xbar.node
@@ -391,8 +259,8 @@ case class AddressAdjusterWrapperParams(
 {
   val dtsFrequency = None
   def instantiate(context: HasTileLinkLocations, loc: Location[TLBusWrapper])(implicit p: Parameters): AddressAdjusterWrapper = {
-    val aaWrapper = LazyModule(new AddressAdjusterWrapper(this, loc.name))
-    aaWrapper.suggestName(loc.name + "_wrapper")
+    val aaWrapper = LazyModule(new AddressAdjusterWrapper(this, context.busContextName + "_" + loc.name))
+    aaWrapper.suggestName(context.busContextName + "_" + loc.name + "_wrapper")
     context.tlBusWrapperLocationMap += (loc -> aaWrapper)
     aaWrapper
   }
@@ -421,8 +289,8 @@ case class TLJBarWrapperParams(
 {
   val dtsFrequency = None
   def instantiate(context: HasTileLinkLocations, loc: Location[TLBusWrapper])(implicit p: Parameters): TLJBarWrapper = {
-    val jbarWrapper = LazyModule(new TLJBarWrapper(this, loc.name))
-    jbarWrapper.suggestName(loc.name + "_wrapper")
+    val jbarWrapper = LazyModule(new TLJBarWrapper(this, context.busContextName + "_" + loc.name))
+    jbarWrapper.suggestName(context.busContextName + "_" + loc.name + "_wrapper")
     context.tlBusWrapperLocationMap += (loc -> jbarWrapper)
     jbarWrapper
   }

@@ -3,9 +3,17 @@
 package freechips.rocketchip.devices.tilelink
 
 import chisel3._
-import org.chipsalliance.cde.config.Parameters
-import freechips.rocketchip.diplomacy._
-import freechips.rocketchip.tilelink._
+
+import org.chipsalliance.cde.config._
+import org.chipsalliance.diplomacy._
+import org.chipsalliance.diplomacy.lazymodule._
+
+import freechips.rocketchip.diplomacy.{AddressSet, TransferSizes}
+import freechips.rocketchip.tilelink.{
+  LFSR64, TLBundleA, TLBundleC, TLBundleE, TLClientNode, TLCustomNode, TLFilter, TLFragmenter,
+  TLFuzzer, TLMasterParameters, TLMasterPortParameters, TLPermissions, TLRAM, TLRAMModel,
+  TLSlaveParameters, TLSlavePortParameters
+}
 
 class MasterMuxNode(uFn: Seq[TLMasterPortParameters] => TLMasterPortParameters)(implicit valName: ValName) extends TLCustomNode
 {
@@ -63,7 +71,7 @@ class MasterMux(uFn: Seq[TLMasterPortParameters] => TLMasterPortParameters)(impl
     in0.a.ready := !stall && out.a.ready &&  bypass
     in1.a.ready := !stall && out.a.ready && !bypass
     out.a.valid := !stall && Mux(bypass, in0.a.valid, in1.a.valid)
-    def castA(x: TLBundleA) = { val ret = Wire(out.a.bits); ret <> x; ret }
+    def castA(x: TLBundleA) = { val ret = Wire(x.cloneType); ret <> x; ret }
     out.a.bits := Mux(bypass, castA(in0.a.bits), castA(in1.a.bits))
 
     out.d.ready := Mux(bypass, in0.d.ready, in1.d.ready)

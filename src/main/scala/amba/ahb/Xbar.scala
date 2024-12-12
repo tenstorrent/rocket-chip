@@ -3,11 +3,14 @@
 package freechips.rocketchip.amba.ahb
 
 import chisel3._
-import chisel3.util._
+import chisel3.util.Mux1H
+
 import org.chipsalliance.cde.config.Parameters
-import freechips.rocketchip.diplomacy._
-import freechips.rocketchip.util._
-import freechips.rocketchip.util.EnhancedChisel3Assign
+import org.chipsalliance.diplomacy.lazymodule.{LazyModule, LazyModuleImp}
+
+import freechips.rocketchip.diplomacy.AddressDecoder
+import freechips.rocketchip.util.BundleField
+
 
 class AHBFanout()(implicit p: Parameters) extends LazyModule {
   val node = new AHBFanoutNode(
@@ -43,11 +46,11 @@ class AHBFanout()(implicit p: Parameters) extends LazyModule {
 
       val (in, _) = node.in(0)
       val a_sel = VecInit(route_addrs.map(seq => seq.map(_.contains(in.haddr)).reduce(_ || _)))
-      val d_sel = Reg(a_sel)
+      val d_sel = RegInit(a_sel)
 
       when (in.hready) { d_sel := a_sel }
       (a_sel zip io_out) foreach { case (sel, out) =>
-        out :<> in
+        out.squeezeAll :<>= in.squeezeAll
         out.hsel := in.hsel && sel
         out.hmaster.map { _ := 0.U }
       }

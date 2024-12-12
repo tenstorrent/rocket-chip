@@ -79,15 +79,15 @@ class SimpleHellaCacheIFReplayQueue(depth: Int)
 
   // Set inflight bit when a request is made
   // Clear it when it is successfully completed
-  inflight := (inflight | Mux(io.req.fire(), next_inflight_onehot, 0.U)) &
+  inflight := (inflight | Mux(io.req.fire, next_inflight_onehot, 0.U)) &
                           ~Mux(io.resp.valid, resp_onehot, 0.U)
 
-  when (io.req.fire()) {
+  when (io.req.fire) {
     reqs(next_inflight) := io.req.bits
   }
 
   // Only one replay outstanding at a time
-  when (io.replay.fire()) { replaying := true.B }
+  when (io.replay.fire) { replaying := true.B }
   when (nack_head || replay_complete) { replaying := false.B }
 }
 
@@ -115,7 +115,7 @@ class SimpleHellaCacheIF(implicit p: Parameters) extends Module
   replayq.io.req.valid := req_helper.fire(replayq.io.req.ready)
   replayq.io.req.bits := io.requestor.req.bits
 
-  val s0_req_fire = io.cache.req.fire()
+  val s0_req_fire = io.cache.req.fire
   val s1_req_fire = RegNext(s0_req_fire)
   val s2_req_fire = RegNext(s1_req_fire)
   val s1_req_tag = RegNext(io.cache.req.bits.tag)
@@ -126,7 +126,7 @@ class SimpleHellaCacheIF(implicit p: Parameters) extends Module
 
   io.cache.req <> req_arb.io.out
   io.cache.s1_kill := false.B
-  io.cache.s1_data.data := RegEnable(req_arb.io.out.bits.data, s0_req_fire)
+  io.cache.s1_data := RegEnable(req_arb.io.out.bits, s0_req_fire)
   io.cache.s2_kill := false.B
 
   replayq.io.nack.valid := io.cache.s2_nack && s2_req_fire

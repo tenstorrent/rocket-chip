@@ -2,11 +2,13 @@
 
 package freechips.rocketchip.tilelink
 
-import Chisel._
-import org.chipsalliance.cde.config.Parameters
-import freechips.rocketchip.diplomacy._
+import chisel3._
+
+import org.chipsalliance.cde.config._
+import org.chipsalliance.diplomacy.lazymodule._
+
 import freechips.rocketchip.regmapper.{RRTest0, RRTest1}
-import freechips.rocketchip.unittest._
+import freechips.rocketchip.unittest.{UnitTest, UnitTestModule}
 
 class TLRRTest0(address: BigInt)(implicit p: Parameters)
   extends RRTest0(address)
@@ -31,6 +33,7 @@ class FuzzRRTest0(txns: Int)(implicit p: Parameters) extends LazyModule {
 class TLRR0Test(txns: Int = 5000, timeout: Int = 500000)(implicit p: Parameters) extends UnitTest(timeout) {
   val dut = Module(LazyModule(new FuzzRRTest0(txns)).module)
   io.finished := dut.io.finished
+  dut.io.start := io.start
 }
 
 class FuzzRRTest1(txns: Int)(implicit p: Parameters) extends LazyModule {
@@ -48,5 +51,6 @@ class FuzzRRTest1(txns: Int)(implicit p: Parameters) extends LazyModule {
 class TLRR1Test(txns: Int = 5000, timeout: Int = 500000)(implicit p: Parameters) extends UnitTest(timeout) {
   val dut = Module(LazyModule(new FuzzRRTest1(txns)).module)
   io.finished := dut.io.finished
+  dut.io.start := io.start
 }
 

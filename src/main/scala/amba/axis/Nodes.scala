@@ -2,9 +2,11 @@
 
 package freechips.rocketchip.amba.axis
 
-import chisel3.internal.sourceinfo.SourceInfo
+import chisel3.experimental.SourceInfo
+
 import org.chipsalliance.cde.config.Parameters
-import freechips.rocketchip.diplomacy._
+import org.chipsalliance.diplomacy.ValName
+import org.chipsalliance.diplomacy.nodes.{SimpleNodeImp, SourceNode, SinkNode, NexusNode, AdapterNode, OutwardNode, IdentityNode, RenderedEdge, InwardNode}
 
 object AXISImp extends SimpleNodeImp[AXISMasterPortParameters, AXISSlavePortParameters, AXISEdgeParameters, AXISBundle]
 {
